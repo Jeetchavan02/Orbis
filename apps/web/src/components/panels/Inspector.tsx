@@ -30,8 +30,8 @@ export function Inspector() {
       <div className="empty-state-icon"><Box size={20} /></div>
       <strong>Nothing selected</strong>
       <span>Click an object in the viewport or the scene list. Drag items in from the Library.</span>
-      {scene.rooms[0] ? (
-        <button type="button" className="ghost-button" onClick={() => useWorkspaceStore.getState().selectEntity(scene.rooms[0]!.id)}>
+      {scene.rooms.length ? (
+        <button type="button" className="ghost-button" onClick={() => useWorkspaceStore.getState().selectEntity(useWorkspaceStore.getState().activeRoomId)}>
           Edit room, doors & windows
         </button>
       ) : null}
@@ -59,6 +59,8 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
   const issues = (validation?.issues ?? []).filter((issue) => issue.objectIds.includes(item.id));
   const locked = !!item.constraints?.locked;
   const clearance = requiredFrontClearance(scene, item);
+  // Elevation is shown relative to the object's floor (scenes can have several storeys).
+  const floorY = scene.rooms.find((room) => room.id === item.roomId)?.position.y ?? 0;
 
   return (
     <div className="inspector-scroll">
@@ -90,7 +92,7 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
         <div className="field-grid">
           <NumberField label="X" value={item.position.x} onBegin={begin} onCommit={(x) => patch({ position: { x } })} disabled={locked} />
           <NumberField label="Z" value={item.position.z} onBegin={begin} onCommit={(z) => patch({ position: { z } })} disabled={locked} />
-          <NumberField label="Elevation" value={item.position.y} min={0} onBegin={begin} onCommit={(y) => patch({ position: { y } })} disabled={locked} />
+          <NumberField label="Elevation" value={item.position.y - floorY} min={0} onBegin={begin} onCommit={(y) => patch({ position: { y: Math.round((floorY + y) * 1000) / 1000 } })} disabled={locked} />
           <NumberField label="Rotation" suffix="°" step={15} value={item.yawDegrees} onBegin={begin} onCommit={(yawDegrees) => patch({ yawDegrees })} disabled={locked} />
         </div>
       </Section>
@@ -133,11 +135,10 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
       <Section title="Geometry" aside={item.mesh ? <span className="section-hint">{item.mesh.positions.length / 3} verts · {item.mesh.indices.length / 3} tris</span> : null}>
         {!item.mesh ? (
           <>
-            <p className="field-note">Convert to an editable mesh to move vertices and extrude faces. The procedural model is replaced by real geometry.</p>
             <button type="button" className="primary-button" onClick={() => {
               if (patchMesh(item)) setTool("vertex");
             }}>
-              <Spline size={14} /> Convert to editable mesh
+              <Spline size={14} /> Edit mesh
             </button>
           </>
         ) : (
@@ -255,8 +256,8 @@ function RoomInspector({ room }: { room: Room }) {
       </Section>
       <Section title="Doors & windows" aside={
         <span className="inline-actions">
-          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("door"), kind: "door", wall: "south", offset: 0, width: 0.85, height: 2.05, sillHeight: 0 }])}><DoorOpen size={13} /> Door</button>
-          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("window"), kind: "window", wall: "north", offset: 0, width: 1.2, height: 1.3, sillHeight: 0.9 }])}><Plus size={13} /> Window</button>
+          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("door"), kind: "door", wall: "south", offset: 0, width: 0.85, height: 2.05, sillHeight: 0, hinge: "left", swing: "in" }])}><DoorOpen size={13} /> Door</button>
+          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("window"), kind: "window", wall: "north", offset: 0, width: 1.2, height: 1.3, sillHeight: 0.9, hinge: "left", swing: "in" }])}><Plus size={13} /> Window</button>
         </span>
       }>
         {room.openings.length === 0 ? <p className="field-note">No openings. Pathway checks need at least one door.</p> : null}
@@ -273,6 +274,12 @@ function RoomInspector({ room }: { room: Room }) {
               <NumberField label="Offset" value={opening.offset} min={-wallLength(opening.wall) / 2 + opening.width / 2} max={wallLength(opening.wall) / 2 - opening.width / 2} onBegin={begin} onCommit={(offset) => updateOpening(opening.id, { offset })} />
               <NumberField label="Width" value={opening.width} min={0.4} max={wallLength(opening.wall)} onBegin={begin} onCommit={(width) => updateOpening(opening.id, { width })} />
               <NumberField label="Height" value={opening.height} min={0.3} max={room.dimensions.height} onBegin={begin} onCommit={(height) => updateOpening(opening.id, { height })} />
+              {opening.kind === "door" ? (
+                <>
+                  <label className="field"><span className="field-label">Hinge</span><select className="field-select" value={opening.hinge} onChange={(event) => updateOpening(opening.id, { hinge: event.target.value as "left" | "right" })}><option value="left">Left</option><option value="right">Right</option></select></label>
+                  <label className="field"><span className="field-label">Opens</span><select className="field-select" value={opening.swing} onChange={(event) => updateOpening(opening.id, { swing: event.target.value as "in" | "out" })}><option value="in">Into room</option><option value="out">Outward</option></select></label>
+                </>
+              ) : null}
               {opening.kind === "window" ? <NumberField label="Sill" value={opening.sillHeight} min={0} max={room.dimensions.height - opening.height} onBegin={begin} onCommit={(sillHeight) => updateOpening(opening.id, { sillHeight })} /> : null}
             </div>
           </div>

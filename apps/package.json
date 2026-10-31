@@ -21,7 +21,8 @@
     "build:web": "npm run build --workspace @reality-builder/web",
     "build": "npm run build:packages && npm run build:server && npm run build:web",
     "typecheck": "npm run build:packages && npm run typecheck --workspace @reality-builder/server && npm run typecheck --workspace @reality-builder/web",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "dev:share": "RB_HOST=0.0.0.0 node scripts/dev.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

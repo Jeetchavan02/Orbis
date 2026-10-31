@@ -15,10 +15,12 @@
   },
   "dependencies": {
     "@reality-builder/shared": "*",
-    "rbush": "^4.0.1"
+    "rbush": "^4.0.1",
+    "suncalc": "^1.9.0"
   },
   "devDependencies": {
     "@types/rbush": "^4.0.0",
+    "@types/suncalc": "^1.9.2",
     "typescript": "^5.6.3"
   }
 }

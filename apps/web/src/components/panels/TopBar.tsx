@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
+import { Users } from "lucide-react";
+import { useShareDialog } from "../../lib/ui";
+import { Check, ChevronDown, Layers, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
 import type { EnvironmentMode } from "@reality-builder/shared";
-import { starterScene } from "../../data/scene";
+import { apartmentScene, starterScene } from "../../data/scene";
 import { createStressScene } from "../../lib/stress";
 import { currentIdentity, downloadScene, useWorkspaceStore } from "../../store/workspace";
 
@@ -27,6 +29,7 @@ export function TopBar() {
   const selfId = useWorkspaceStore((state) => state.selfId);
   const saveStatus = useWorkspaceStore((state) => state.saveStatus);
   const showPerf = useWorkspaceStore((state) => state.showPerf);
+  const activeRoomId = useWorkspaceStore((state) => state.activeRoomId);
   const { undo, redo, dispatch, save, replaceScene, setShowPerf, notify } = useWorkspaceStore.getState();
   const [menuOpen, setMenuOpen] = useState(false);
   const [name, setName] = useState(scene.name);
@@ -79,6 +82,14 @@ export function TopBar() {
       </div>
 
       <div className="topbar-center">
+        {scene.rooms.length > 1 ? (
+          <label className="floor-select" title="Switch floor">
+            <Layers size={14} />
+            <select aria-label="Floor" value={activeRoomId} onChange={(event) => useWorkspaceStore.getState().setActiveRoom(event.target.value)}>
+              {[...scene.rooms].sort((a, b) => b.position.y - a.position.y).map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+            </select>
+          </label>
+        ) : null}
         <div className="segmented" role="radiogroup" aria-label="Environment">
           {MODES.map((entry) => (
             <button
@@ -97,9 +108,7 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
-        <button type="button" className="icon-button" onClick={undo} disabled={history.past.length === 0} title={history.past.length ? `Undo ${history.past.at(-1)!.label} (⌘Z)` : "Nothing to undo"} aria-label="Undo"><Undo2 size={16} /></button>
-        <button type="button" className="icon-button" onClick={redo} disabled={history.future.length === 0} title={history.future.length ? `Redo ${history.future[0]!.label} (⇧⌘Z)` : "Nothing to redo"} aria-label="Redo"><Redo2 size={16} /></button>
-        <span className="divider" />
+
         <div className="presence" aria-label="Collaborators">
           <span className="avatar avatar--self" style={{ background: currentIdentity.color }} title={currentIdentity.name + " (you)"}>{initials(currentIdentity.name)}</span>
           {others.slice(0, 4).map((peer) => (
@@ -114,6 +123,7 @@ export function TopBar() {
           {connection === "online" ? "Live" : connection === "connecting" ? "Connecting" : "Offline"}
         </span>
         <button type="button" className={"icon-button" + (showPerf ? " icon-button--active" : "")} onClick={() => setShowPerf(!showPerf)} title="Performance overlay (P)" aria-label="Performance overlay"><Gauge size={16} /></button>
+        <button type="button" className="ghost-button" onClick={() => useShareDialog.getState().setOpen(true)} title="Invite collaborators"><Users size={14} /> Share</button>
         <button type="button" className="primary-button" onClick={save} title="Save (⌘S)"><Save size={14} /> Save</button>
         <div className="menu" ref={menuRef}>
           <button type="button" className="icon-button" onClick={() => setMenuOpen(!menuOpen)} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Scene menu"><ChevronDown size={16} /></button>
@@ -122,7 +132,8 @@ export function TopBar() {
               <button type="button" role="menuitem" onClick={() => { downloadScene(scene); setMenuOpen(false); }}><Download size={14} /> Export scene (.json)</button>
               <button type="button" role="menuitem" onClick={() => { fileRef.current?.click(); setMenuOpen(false); }}><FolderOpen size={14} /> Open scene file…</button>
               <span className="menu-sep" />
-              <button type="button" role="menuitem" onClick={() => { replaceScene(starterScene, "Loaded the demo bedroom."); setMenuOpen(false); }}><RotateCcw size={14} /> Reset to demo bedroom</button>
+              <button type="button" role="menuitem" onClick={() => { replaceScene(starterScene, "Loaded the demo bedroom."); setMenuOpen(false); }}><RotateCcw size={14} /> Load demo bedroom</button>
+              <button type="button" role="menuitem" onClick={() => { replaceScene(apartmentScene, "Loaded the 3-floor demo apartment."); setMenuOpen(false); }}><Layers size={14} /> Load demo apartment (3 floors)</button>
               <button type="button" role="menuitem" onClick={() => { replaceScene(createStressScene(500), "Loaded 500-object stress scene."); setShowPerf(true); setMenuOpen(false); }}><Gauge size={14} /> Load 500-object stress test</button>
               <button type="button" role="menuitem" onClick={() => { replaceScene(createStressScene(1000), "Loaded 1000-object stress scene."); setShowPerf(true); setMenuOpen(false); }}><Gauge size={14} /> Load 1,000-object stress test</button>
             </div>

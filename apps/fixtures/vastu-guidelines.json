@@ -1,0 +1,20 @@
+{
+  "id": "vastu-basic",
+  "name": "Vastu (bedroom basics)",
+  "description": "Common Vastu Shastra placement guidance for bedrooms, expressed as compass checks relative to the room's north direction.",
+  "disclaimer": "Traditional guidance, not engineering requirements. Interpretations vary between practitioners; these checks never override collision, clearance or pathway rules.",
+  "rules": [
+    { "id": "bed-zone", "title": "Bed in the south-west", "appliesTo": { "categories": ["beds"] }, "check": "zone", "zones": ["SW", "S", "W"], "weight": 2,
+      "explanation": "The south-west zone is associated with stability; beds are commonly placed there." },
+    { "id": "bed-head", "title": "Sleep with the head to the south or east", "appliesTo": { "categories": ["beds"] }, "check": "backing", "directions": ["S", "E", "SE", "SW"], "weight": 2,
+      "explanation": "The headboard (the bed's back) should point south or east; sleeping with the head to the north is traditionally avoided." },
+    { "id": "wardrobe-zone", "title": "Heavy storage in the south or west", "appliesTo": { "catalogItemIds": ["wardrobe", "bookshelf", "dresser"] }, "check": "zone", "zones": ["S", "SW", "W", "NW"], "weight": 1,
+      "explanation": "Heavy furniture is recommended along the south and west walls, keeping the north and east lighter." },
+    { "id": "desk-facing", "title": "Work facing north or east", "appliesTo": { "catalogItemIds": ["desk", "desk-chair"] }, "check": "facing", "directions": ["N", "E", "NE"], "weight": 1,
+      "explanation": "Facing north or east while working is considered favorable for focus." },
+    { "id": "plant-zone", "title": "Plants in the north or east", "appliesTo": { "catalogItemIds": ["plant"] }, "check": "zone", "zones": ["N", "NE", "E"], "weight": 0.5,
+      "explanation": "Living plants are traditionally placed toward the north-east." },
+    { "id": "center-open", "title": "Keep the center open", "appliesTo": { "categories": ["storage", "tables", "seating"] }, "check": "zone", "zones": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"], "weight": 1,
+      "explanation": "The room's center (Brahmasthan) is ideally kept free of heavy furniture." }
+  ]
+}

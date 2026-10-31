@@ -107,8 +107,11 @@ function OpeningModel({ opening, along, thickness }: { opening: Opening; along: 
       </group>
     );
   }
-  // Door: frame + slightly open leaf swinging into the room (+Z side of the wall).
+  // Door: frame + leaf shown ajar. Wall-local +Z points into the room and −X is "left" seen from inside.
   const leafWidth = opening.width - frame * 2;
+  const hingeSign = opening.hinge === "right" ? 1 : -1;
+  const swingIn = opening.swing !== "out";
+  const angle = (swingIn ? 1 : -1) * hingeSign * 35 * DEG;
   return (
     <group position={[along, 0, 0]}>
       {[[-opening.width / 2 + frame / 2, opening.height / 2, frame, opening.height], [opening.width / 2 - frame / 2, opening.height / 2, frame, opening.height], [0, opening.height - frame / 2, opening.width, frame]].map(([x, y, w, h], index) => (
@@ -117,12 +120,12 @@ function OpeningModel({ opening, along, thickness }: { opening: Opening; along: 
           <meshStandardMaterial color="#f2efe9" roughness={0.5} />
         </mesh>
       ))}
-      <group position={[-opening.width / 2 + frame, 0, thickness / 2]} rotation={[0, -28 * DEG, 0]}>
-        <mesh position={[leafWidth / 2, (opening.height - frame) / 2, 0.02]} castShadow>
+      <group position={[hingeSign * (opening.width / 2 - frame), 0, (swingIn ? 1 : -1) * thickness / 2]} rotation={[0, angle, 0]}>
+        <mesh position={[-hingeSign * leafWidth / 2, (opening.height - frame) / 2, (swingIn ? 1 : -1) * 0.02]} castShadow>
           <boxGeometry args={[leafWidth, opening.height - frame, 0.04]} />
           <meshStandardMaterial color="#d9cbb6" roughness={0.6} />
         </mesh>
-        <mesh position={[leafWidth - 0.08, 1.0, 0.06]}>
+        <mesh position={[-hingeSign * (leafWidth - 0.08), 1.0, (swingIn ? 1 : -1) * 0.06]}>
           <sphereGeometry args={[0.025, 12, 12]} />
           <meshStandardMaterial color="#b9b2a5" metalness={0.8} roughness={0.25} />
         </mesh>

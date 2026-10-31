@@ -51,7 +51,7 @@ describe("spatial validation", () => {
 
   it("measures the available front clearance against the requirement", () => {
     // Desk chair 0.4 m in front of the dresser (which needs 0.70 m).
-    const scene = move(bedroom, "obj-desk-chair", 1.5, 0.4);
+    const scene = move(bedroom, "obj-desk-chair", 1.4, 0.4);
     const issue = validateScene(scene).issues.find((entry) => entry.id === "clearance.front:obj-dresser")!;
     expect(issue.threshold).toBe(0.7);
     expect(issue.measured).toBeGreaterThan(0.1);
@@ -70,7 +70,7 @@ describe("spatial validation", () => {
   });
 
   it("respects per-object clearance constraints and rule toggles", () => {
-    const scene = move(bedroom, "obj-desk-chair", 1.5, 0.4);
+    const scene = move(bedroom, "obj-desk-chair", 1.4, 0.4);
     const relaxed = applySceneAction(scene, { type: "furniture.update", furnitureId: "obj-dresser", patch: { constraints: { frontClearance: 0.1 } } }).scene;
     expect(validateScene(relaxed).issues.some((issue) => issue.id === "clearance.front:obj-dresser")).toBe(false);
     const disabled = applySceneAction(scene, { type: "scene.update", patch: { rules: { clearances: false } } }).scene;
@@ -130,5 +130,24 @@ describe("layout recovery", () => {
     for (const candidate of generateRecoveryCandidates(locked).candidates) {
       expect(candidate.moves.some((entry) => entry.objectId === "obj-desk-chair")).toBe(false);
     }
+  });
+});
+
+describe("multi-floor scenes", () => {
+  const apartment = SceneSchema.parse(JSON.parse(readFileSync(resolve(process.cwd(), "fixtures/apartment-scene.json"), "utf8")));
+
+  it("validates the 3-floor demo apartment cleanly", () => {
+    expect(apartment.rooms).toHaveLength(3);
+    expect(new Set(apartment.rooms.map((room) => room.position.y)).size).toBe(3);
+    expect(validateScene(apartment).issues).toEqual([]);
+  });
+
+  it("never lets furniture on one floor collide with or block clearances on another", () => {
+    const ground = apartment.furniture.find((item) => item.roomId === "room-ground" && item.catalogItemId === "sofa")!;
+    const upstairs = apartment.furniture.find((item) => item.roomId === "room-first" && item.catalogItemId === "bed-queen")!;
+    // Put the bedroom's bed directly above the living-room sofa.
+    const stacked = move(apartment, upstairs.id, ground.position.x, ground.position.z + 0.6);
+    const issues = validateScene(stacked).issues;
+    expect(issues.some((issue) => issue.objectIds.includes(ground.id))).toBe(false);
   });
 });

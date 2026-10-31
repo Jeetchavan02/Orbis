@@ -1,7 +1,7 @@
 import RBush from "rbush";
 import type { BaseSceneAction, FurnitureObject, Scene, SceneAction, ValidationIssue } from "@reality-builder/shared";
 import { footprint, polygonAabb, roomToWorld, satPenetration, worldToRoom, type Polygon } from "./geometry.js";
-import { doorSwingZone, frontZone, isWalkingObstacle, requiredFrontClearance, validateScene } from "./validate.js";
+import { doorSwingZone, floorOf, frontZone, isWalkingObstacle, requiredFrontClearance, validateScene } from "./validate.js";
 
 export type RecoveryMove = {
   objectId: string;
@@ -173,7 +173,7 @@ function chooseTarget(scene: Scene, issues: ValidationIssue[], strategy: Strateg
 function findPose(scene: Scene, item: FurnitureObject, target: ValidationIssue, issues: ValidationIssue[], strategy: Strategy, onEvaluate: () => void) {
   const room = scene.rooms.find((entry) => entry.id === item.roomId);
   if (!room) return null;
-  const others = scene.furniture.filter((other) => other.id !== item.id && isWalkingObstacle(other));
+  const others = scene.furniture.filter((other) => other.id !== item.id && other.roomId === item.roomId && isWalkingObstacle(other, room.position.y));
   const tree = new RBush<{ minX: number; minY: number; maxX: number; maxY: number; polygon: Polygon }>();
   tree.load(others.map((other) => {
     const polygon = footprint(other);
@@ -208,7 +208,7 @@ function findPose(scene: Scene, item: FurnitureObject, target: ValidationIssue, 
         if (ring === 0 && yaw === item.yawDegrees) continue;
         const candidate: FurnitureObject = { ...item, position: { ...item.position, x: round(world_x), z: round(world_z) }, yawDegrees: yaw };
         const polygon = footprint(candidate);
-        if (!insideRoom(polygon) || hits(polygon) || (isWalkingObstacle(item) && hitsReserved(polygon))) continue;
+        if (!insideRoom(polygon) || hits(polygon) || (isWalkingObstacle(item, floorOf(scene, item)) && hitsReserved(polygon))) continue;
         if (clearance > 0) {
           const zone = frontZone(candidate, clearance);
           if (!insideRoom(zone) || hits(zone)) continue;

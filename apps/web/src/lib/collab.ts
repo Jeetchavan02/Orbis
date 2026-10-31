@@ -11,27 +11,41 @@ const PALETTE = ["#d9603b", "#3b82d9", "#8a5cd6", "#2f9e6e", "#c2417a", "#c79a1e
 const ADJECTIVES = ["Amber", "Cobalt", "Juniper", "Coral", "Slate", "Saffron", "Indigo", "Moss"];
 const ANIMALS = ["Fox", "Heron", "Otter", "Lynx", "Wren", "Ibex", "Marten", "Finch"];
 
-/** Per-tab identity, so two tabs of the same browser are distinct collaborators. */
+/**
+ * Collaborator identity. The display name/colour persist per tab; the clientId is new on every page load,
+ * so duplicated or restored tabs (which copy sessionStorage) never share a connection identity.
+ */
 export function sessionIdentity() {
   const key = "rb.identity";
+  let profile: { name: string; color: string } | null = null;
   try {
     const stored = sessionStorage.getItem(key);
-    if (stored) return JSON.parse(stored) as { clientId: string; name: string; color: string };
+    if (stored) profile = JSON.parse(stored) as { name: string; color: string };
   } catch {
-    // Storage may be unavailable (private mode); fall through to a fresh identity.
+    // Storage may be unavailable (private mode); fall through to a fresh profile.
   }
-  const random = crypto.getRandomValues(new Uint32Array(3));
-  const identity = {
-    clientId: crypto.randomUUID(),
-    name: ADJECTIVES[random[0]! % ADJECTIVES.length] + " " + ANIMALS[random[1]! % ANIMALS.length],
-    color: PALETTE[random[2]! % PALETTE.length]!,
-  };
+  if (!profile) {
+    const random = crypto.getRandomValues(new Uint32Array(3));
+    profile = {
+      name: ADJECTIVES[random[0]! % ADJECTIVES.length] + " " + ANIMALS[random[1]! % ANIMALS.length],
+      color: PALETTE[random[2]! % PALETTE.length]!,
+    };
+    try {
+      sessionStorage.setItem(key, JSON.stringify(profile));
+    } catch {
+      // Not persisted; a reload will produce a new name.
+    }
+  }
+  return { clientId: crypto.randomUUID(), ...profile };
+}
+
+/** Persists a new display name/colour for this tab. */
+export function saveProfile(name: string, color: string) {
   try {
-    sessionStorage.setItem(key, JSON.stringify(identity));
+    sessionStorage.setItem("rb.identity", JSON.stringify({ name, color }));
   } catch {
-    // Not persisted; a reload will produce a new identity.
+    // Not persisted; applies to this session only.
   }
-  return identity;
 }
 
 /** WebSocket client with exponential-backoff reconnection. The server is authoritative. */
@@ -74,11 +88,12 @@ export class CollabClient {
       if (parsed.data.type === "welcome") this.handlers.onState("online");
       this.handlers.onMessage(parsed.data);
     });
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
       this.handlers.onState("offline");
-      if (!this.closed) this.scheduleReconnect();
+      // 4000 = replaced by a newer connection from this same tab; reconnecting would fight it.
+      if (!this.closed && event.code !== 4000) this.scheduleReconnect();
     });
   }
 

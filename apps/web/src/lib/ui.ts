@@ -6,3 +6,5 @@ export const useContextMenu = create<{ menu: { x: number; y: number; id: string 
   open: (x, y, id) => set({ menu: { x, y, id } }),
   close: () => set({ menu: null }),
 }));
+
+export const useShareDialog = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({ open: false, setOpen: (open) => set({ open }) }));

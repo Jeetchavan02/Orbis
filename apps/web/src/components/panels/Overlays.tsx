@@ -1,7 +1,9 @@
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import type { FurnitureObject, Room } from "@reality-builder/shared";
 import { usePerfStore } from "../../lib/perf";
-import { useWorkspaceStore } from "../../store/workspace";
+import { useEffect, useState } from "react";
+import { currentIdentity, useWorkspaceStore } from "../../store/workspace";
+import { useShareDialog } from "../../lib/ui";
 
 /** Live measurements only: FPS/draw calls from the render loop, the rest from the last validation run. */
 export function PerfOverlay() {
@@ -105,6 +107,83 @@ export function Notices() {
           <button type="button" aria-label="Dismiss" onClick={() => dismiss(notice.id)}><X size={12} /></button>
         </div>
       ))}
+    </div>
+  );
+}
+
+const SHARE_COLORS = ["#d9603b", "#3b82d9", "#8a5cd6", "#2f9e6e", "#c2417a", "#c79a1e"];
+
+/** Invite people to the live scene and set how you appear to them. */
+export function ShareDialog() {
+  const open = useShareDialog((state) => state.open);
+  const setOpen = useShareDialog((state) => state.setOpen);
+  const peers = useWorkspaceStore((state) => state.peers);
+  const selfId = useWorkspaceStore((state) => state.selfId);
+  const connection = useWorkspaceStore((state) => state.connection);
+  const scene = useWorkspaceStore((state) => state.scene);
+  const [addresses, setAddresses] = useState<string[]>([]);
+  const [name, setName] = useState(currentIdentity.name);
+  const [color, setColor] = useState(currentIdentity.color);
+  const [copied, setCopied] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setName(currentIdentity.name);
+    setColor(currentIdentity.color);
+    fetch("/api/network").then((response) => response.json()).then((data: { addresses: string[] }) => setAddresses(data.addresses)).catch(() => setAddresses([]));
+  }, [open]);
+  if (!open) return null;
+
+  const sceneId = new URLSearchParams(location.search).get("scene") ?? "default";
+  const query = `?scene=${encodeURIComponent(sceneId)}`;
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+  const links = [`${location.origin}/${query}`, ...(loopback ? addresses.map((address) => `${location.protocol}//${address}:${location.port}/${query}`) : [])];
+  const copy = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(link);
+      window.setTimeout(() => setCopied(null), 1500);
+    } catch {
+      useWorkspaceStore.getState().notify("error", "Copy failed — select the link and copy it manually.");
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="share-title" onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
+      <div className="modal share-modal">
+        <header className="share-head">
+          <h2 id="share-title">Collaborate on “{scene.name}”</h2>
+          <button type="button" className="icon-button" aria-label="Close" onClick={() => setOpen(false)}><X size={16} /></button>
+        </header>
+        <p className="field-note">Everyone with the link edits the same scene live. Edits are version-checked: if two people change the same object, nobody is silently overwritten.</p>
+        <div className="share-links">
+          {links.map((link, index) => (
+            <div key={link} className="share-link">
+              <span className="share-link-label">{index === 0 ? (loopback ? "This computer" : "Link") : "Same Wi-Fi / network"}</span>
+              <input readOnly value={link} onFocus={(event) => event.currentTarget.select()} aria-label="Share link" />
+              <button type="button" className="ghost-button" onClick={() => void copy(link)}>{copied === link ? "Copied" : "Copy"}</button>
+            </div>
+          ))}
+        </div>
+        {loopback ? <p className="field-note">For other devices, start the app with <code>npm run dev:share</code> so it accepts network connections, then send them a “Same Wi-Fi” link.</p> : null}
+        <div className="share-section-title">You appear as</div>
+        <div className="share-identity">
+          <input className="share-name" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} aria-label="Your display name" />
+          <div className="share-colors" role="radiogroup" aria-label="Your colour">
+            {SHARE_COLORS.map((swatch) => <button key={swatch} type="button" role="radio" aria-checked={color === swatch} aria-label={swatch} className={"share-color" + (color === swatch ? " share-color--active" : "")} style={{ background: swatch }} onClick={() => setColor(swatch)} />)}
+          </div>
+          <button type="button" className="primary-button" disabled={!name.trim() || (name.trim() === currentIdentity.name && color === currentIdentity.color)} onClick={() => useWorkspaceStore.getState().rename(name.trim(), color)}>Update</button>
+        </div>
+        <div className="share-section-title">In this scene now · {connection === "online" ? peers.length : 0}</div>
+        <ul className="share-people">
+          {connection !== "online" ? <li className="field-note">Not connected to the collaboration server.</li> : null}
+          {peers.map((peer) => (
+            <li key={peer.clientId}>
+              <span className="avatar" style={{ background: peer.color, marginLeft: 0 }}>{peer.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
+              <span><strong>{peer.name}{peer.clientId === selfId ? " (you)" : ""}</strong><span className="muted">{peer.selectedId ? "editing " + (scene.furniture.find((item) => item.id === peer.selectedId)?.name ?? scene.rooms.find((room) => room.id === peer.selectedId)?.name ?? "an object") : "viewing"}</span></span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

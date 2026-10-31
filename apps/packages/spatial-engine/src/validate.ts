@@ -56,9 +56,14 @@ export function isFloorCovering(item: FurnitureObject) {
   return item.constraints?.floorCovering ?? item.dimensions.height <= 0.03;
 }
 
-/** Whether the object physically obstructs walking at floor level. */
-export function isWalkingObstacle(item: FurnitureObject) {
-  return !isFloorCovering(item) && item.position.y < WALKING_HEIGHT;
+/** Whether the object physically obstructs walking at its room's floor level (`floorY` = room elevation). */
+export function isWalkingObstacle(item: FurnitureObject, floorY: number) {
+  return !isFloorCovering(item) && item.position.y - floorY < WALKING_HEIGHT;
+}
+
+/** Elevation of a room's floor, used to make heights relative on multi-floor scenes. */
+export function floorOf(scene: Scene, item: FurnitureObject) {
+  return scene.rooms.find((room) => room.id === item.roomId)?.position.y ?? 0;
 }
 
 export function requiredFrontClearance(scene: Scene, item: FurnitureObject) {
@@ -183,7 +188,7 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
           highlight: { objectIds: [item.id], zones: [] },
         });
       }
-      const top = item.position.y + item.dimensions.height;
+      const top = item.position.y - room.position.y + item.dimensions.height;
       if (top > room.dimensions.height + BOUNDARY_TOLERANCE) {
         issues.push({
           id: `boundary.outside-room:${item.id}:ceiling`,
@@ -201,14 +206,15 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
   }
   const tBoundaries = now() - t2;
 
-  const obstacleIndices = furniture.map((_, index) => index).filter((index) => isWalkingObstacle(furniture[index]!));
+  const obstacleIndices = furniture.map((_, index) => index).filter((index) => isWalkingObstacle(furniture[index]!, rooms.get(furniture[index]!.roomId)?.position.y ?? 0));
   const isObstacle = new Set(obstacleIndices);
-  const overlappingObstacles = (zone: Polygon, excludeIndex: number) => {
+  /** Walking obstacles in `roomId` overlapping a floor zone (other floors share X/Z, so the room filter matters). */
+  const overlappingObstacles = (zone: Polygon, excludeIndex: number, roomId: string) => {
     const box = polygonAabb(zone);
     return tree
       .search({ minX: box.minX, minY: box.minZ, maxX: box.maxX, maxY: box.maxZ })
       .map((entry) => entry.index)
-      .filter((index) => index !== excludeIndex && isObstacle.has(index) && satPenetration(zone, polygons[index]!) > COLLISION_TOLERANCE);
+      .filter((index) => index !== excludeIndex && isObstacle.has(index) && furniture[index]!.roomId === roomId && satPenetration(zone, polygons[index]!) > COLLISION_TOLERANCE);
   };
 
   // ---- Front clearances (binary search for the free depth against obstacles and walls).
@@ -217,13 +223,13 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
     furniture.forEach((item, index) => {
       const required = requiredFrontClearance(scene, item);
       const room = rooms.get(item.roomId);
-      if (required <= 0 || !room || !isWalkingObstacle(item)) return;
+      if (required <= 0 || !room || !isWalkingObstacle(item, room.position.y)) return;
       const zone = frontZone(item, required);
       const wallBlocked = (depth: number) => frontZone(item, depth).some((point) => {
         const [x, z] = worldToRoom(room, point);
         return Math.abs(x) > room.dimensions.width / 2 + BOUNDARY_TOLERANCE || Math.abs(z) > room.dimensions.depth / 2 + BOUNDARY_TOLERANCE;
       });
-      const blockers = overlappingObstacles(zone, index);
+      const blockers = overlappingObstacles(zone, index, room.id);
       const wall = wallBlocked(required);
       if (blockers.length === 0 && !wall) return;
 
@@ -231,7 +237,7 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
       let high = required;
       for (let step = 0; step < 14; step += 1) {
         const mid = (low + high) / 2;
-        if (overlappingObstacles(frontZone(item, mid), index).length > 0 || wallBlocked(mid)) high = mid;
+        if (overlappingObstacles(frontZone(item, mid), index, room.id).length > 0 || wallBlocked(mid)) high = mid;
         else low = mid;
       }
       const blockerNames = blockers.map((blocker) => furniture[blocker]!.name);
@@ -261,8 +267,10 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
     for (const room of scene.rooms) {
       const doors = room.openings.filter((opening) => opening.kind === "door");
       for (const door of doors) {
+        // Outward-swinging doors sweep outside this room, so nothing inside can block them.
+        if (door.swing === "out") continue;
         const zone = doorSwingZone(room, door);
-        const blockers = overlappingObstacles(zone, -1).filter((index) => furniture[index]!.roomId === room.id);
+        const blockers = overlappingObstacles(zone, -1, room.id);
         if (blockers.length > 0) {
           issues.push({
             id: `pathway.door-blocked:${room.id}:${door.id}`,

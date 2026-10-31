@@ -14,9 +14,9 @@ import {
   type SceneAction,
   type ServerMessage,
 } from "@reality-builder/shared";
-import type { RecoveryCandidate, RecoveryResult, ValidationResult } from "@reality-builder/spatial-engine";
+import type { GuidelineReport, LayoutScore, OptimizationResult, RecoveryCandidate, RecoveryResult, SunStudy, ValidationResult } from "@reality-builder/spatial-engine";
 import { starterScene } from "../data/scene";
-import { CollabClient, sessionIdentity, type ConnectionState } from "../lib/collab";
+import { CollabClient, saveProfile, sessionIdentity, type ConnectionState } from "../lib/collab";
 import type { WorkerRequest, WorkerResponse } from "../workers/spatial.worker";
 
 export type TransformTool = "select" | "translate" | "rotate" | "scale" | "vertex" | "face";
@@ -44,7 +44,11 @@ type WorkspaceStore = {
   scene: Scene;
   history: { past: TrackedEntry[]; future: TrackedEntry[] };
   selectedEntityId: string;
+  /** Floor/room being edited; placement, camera and insights follow it. */
+  activeRoomId: string;
   tool: TransformTool;
+  /** "2d" = top-down orthographic floor plan, "3d" = perspective orbit view. */
+  viewMode: "plan" | "2d" | "3d";
   resetCameraSignal: number;
   focusSignal: number;
 
@@ -58,6 +62,10 @@ type WorkspaceStore = {
   saveStatus: { state: "saved" | "unsaved" | "saving" | "local"; savedAt: string | null; path: string | null };
 
   validation: ValidationResult | null;
+  score: LayoutScore | null;
+  guidelines: GuidelineReport | null;
+  optimization: { status: "idle" | "running" | "done" | "error"; result: OptimizationResult | null; preview: boolean; message?: string };
+  sun: { status: "idle" | "running" | "done" | "error"; result: SunStudy | null; timestamp: number; mode: "instant" | "daily"; overlay: boolean; message?: string };
   showRoutes: boolean;
   showPerf: boolean;
   recovery: { status: "idle" | "running" | "done" | "error"; result: RecoveryResult | null; previewId: string | null; message?: string };
@@ -73,7 +81,13 @@ type WorkspaceStore = {
   resolveConflict: (choice: "mine" | "theirs") => void;
   resolveOfflineConflict: (choice: "mine" | "theirs") => void;
   selectEntity: (entityId: string) => void;
+  setActiveRoom: (roomId: string) => void;
   setTool: (tool: TransformTool) => void;
+  setViewMode: (viewMode: "plan" | "2d" | "3d") => void;
+  /** Change this collaborator's display name/colour (broadcast to everyone). */
+  rename: (name: string, color: string) => void;
+  /** Share this user's pointer position (throttled); null hides the cursor. */
+  sendCursor: (cursor: { x: number; y: number; z: number; roomId: string } | null) => void;
   setMeshSelection: (selection: Partial<MeshSelection>) => void;
   requestCameraReset: () => void;
   requestFocus: () => void;
@@ -82,6 +96,11 @@ type WorkspaceStore = {
   applyCandidate: (candidate: RecoveryCandidate) => void;
   setShowRoutes: (show: boolean) => void;
   revalidate: () => void;
+  runOptimization: () => void;
+  applyOptimization: () => void;
+  setOptimizationPreview: (preview: boolean) => void;
+  runSunStudy: (options?: { timestamp?: number; mode?: "instant" | "daily" }) => void;
+  setSunOverlay: (overlay: boolean) => void;
   setShowPerf: (show: boolean) => void;
   notify: (tone: Notice["tone"], text: string) => void;
   dismissNotice: (id: number) => void;
@@ -136,6 +155,8 @@ const sceneId = new URLSearchParams(location.search).get("scene") ?? "default";
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
   const pending = new Map<string, Pending>();
+  /** Last server sequence number applied; a gap means a missed message → resynchronize. */
+  let lastSeq = -1;
 
   const apply = (scene: Scene, action: SceneAction) => applySceneAction(scene, action);
 
@@ -191,15 +212,25 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
       case "welcome": {
         const { offlineEdits, scene: localScene } = get();
         pending.clear();
+        lastSeq = message.seq;
         if (offlineEdits > 0) {
           // Never silently drop offline work: ask which version wins.
           set({ selfId: message.selfId, peers: message.peers, offlineConflict: { localScene, serverScene: message.scene, edits: offlineEdits } });
           return;
         }
+        lastSeq = message.seq;
         set({ scene: message.scene, selfId: message.selfId, peers: message.peers, saveStatus: { state: "saved", savedAt: null, path: null } });
         return;
       }
       case "applied": {
+        if (lastSeq >= 0 && message.seq !== lastSeq + 1) {
+          console.warn(`Missed server updates (expected seq ${lastSeq + 1}, got ${message.seq}); resynchronizing.`);
+          lastSeq = -1;
+          client.close();
+          client.connect();
+          return;
+        }
+        lastSeq = message.seq;
         let result;
         try {
           result = apply(get().scene, message.action);
@@ -214,6 +245,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
           pending.delete(message.requestId);
           recordApplied(own.kind, result.scene, message.action, result.inverse, own.label, own.entry);
         } else {
+          activity(message.clientName, message.label);
           const { selectedEntityId } = get();
           const exists = !selectedEntityId || result.scene.furniture.some((item) => item.id === selectedEntityId) || result.scene.rooms.some((room) => room.id === selectedEntityId);
           set({ scene: result.scene, selectedEntityId: exists ? selectedEntityId : "", saveStatus: { ...get().saveStatus, state: "unsaved" } });
@@ -239,7 +271,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         set({ saveStatus: { state: "saved", savedAt: message.savedAt, path: message.path } });
         return;
       case "scene-replaced": {
+        lastSeq = message.seq;
         pending.clear();
+        // A newer full scene supersedes any unresolved offline reconciliation.
+        if (get().offlineConflict) {
+          set({ offlineConflict: null, offlineEdits: 0 });
+          storeOfflineWork(message.scene, 0);
+        }
         set({ scene: message.scene, history: { past: [], future: [] }, selectedEntityId: "", recovery: { status: "idle", result: null, previewId: null } });
         if (message.by !== identity.name) notify("info", `${message.by} loaded a different scene.`);
         return;
@@ -249,6 +287,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         return;
     }
   };
+
+  // Activity feed: show what collaborators change (coalesced so a burst of edits is one notice).
+  let lastActivity = { key: "", at: 0 };
+  const activity = (who: string, label: string) => {
+    const key = who + label;
+    if (key === lastActivity.key && Date.now() - lastActivity.at < 2500) return;
+    lastActivity = { key, at: Date.now() };
+    notify("info", `${who}: ${label}`);
+  };
+
+  let cursorTimer: number | null = null;
+  let pendingCursor: { x: number; y: number; z: number; roomId: string } | null | undefined;
 
   const dropEntry = (entry: TrackedEntry) => {
     set((state) => ({ history: { past: state.history.past.filter((item) => item !== entry), future: state.history.future.filter((item) => item !== entry) } }));
@@ -271,6 +321,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
   let inFlight = false;
   let queued = false;
   let recoverId = 0;
+  let optimizeId = 0;
+  let sunId = 0;
   const requestValidation = () => {
     if (inFlight) {
       queued = true;
@@ -278,21 +330,29 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     }
     inFlight = true;
     queued = false;
-    worker.postMessage({ type: "validate", id: ++validateId, scene: get().scene, routes: get().showRoutes } satisfies WorkerRequest);
+    worker.postMessage({ type: "validate", id: ++validateId, scene: get().scene, routes: get().showRoutes, roomId: get().activeRoomId } satisfies WorkerRequest);
   };
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const response = event.data;
     if (response.type === "validate") {
       inFlight = false;
-      set({ validation: response.result });
+      set({ validation: response.result, score: response.score, guidelines: response.guidelines });
       if (queued) requestValidation();
     } else if (response.type === "recover") {
       if (response.id !== recoverId) return;
       set({ recovery: { status: "done", result: response.result, previewId: response.result.candidates[0]?.id ?? null } });
+    } else if (response.type === "optimize") {
+      if (response.id !== optimizeId) return;
+      set({ optimization: { status: "done", result: response.result, preview: true } });
+    } else if (response.type === "sun") {
+      if (response.id !== sunId) return;
+      set((state) => ({ sun: { ...state.sun, status: "done", result: response.result } }));
     } else {
-      inFlight = false;
-      console.error("Spatial worker error:", response.message);
-      set({ recovery: { ...get().recovery, status: get().recovery.status === "running" ? "error" : get().recovery.status, message: response.message } });
+      console.error("Spatial worker error:", response.request, response.message);
+      if (response.request === "validate") inFlight = false;
+      if (response.request === "recover") set({ recovery: { ...get().recovery, status: "error", message: response.message } });
+      if (response.request === "optimize") set({ optimization: { status: "error", result: null, preview: false, message: response.message } });
+      if (response.request === "sun") set((state) => ({ sun: { ...state.sun, status: "error", message: response.message } }));
       notify("error", "Spatial engine error: " + response.message);
     }
   };
@@ -305,12 +365,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     requestValidation();
     client.connect();
   });
+  // Dev hot-reload: shut down this instance's socket and worker so stale clients never linger.
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      client.close();
+      worker.terminate();
+    });
+  }
 
   return {
     scene: restoredOfflineWork?.scene ?? starterScene,
     history: { past: [], future: [] },
     selectedEntityId: "",
-    tool: "translate",
+    activeRoomId: (restoredOfflineWork?.scene ?? starterScene).rooms[0]?.id ?? "",
+    tool: "select",
+    viewMode: "3d",
     resetCameraSignal: 0,
     focusSignal: 0,
     connection: "connecting",
@@ -321,6 +390,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     offlineEdits: restoredOfflineWork?.edits ?? 0,
     saveStatus: { state: restoredOfflineWork ? "local" : "saved", savedAt: null, path: null },
     validation: null,
+    score: null,
+    guidelines: null,
+    optimization: { status: "idle", result: null, preview: false },
+    sun: { status: "idle", result: null, timestamp: defaultSunTime(), mode: "instant", overlay: true },
     showRoutes: false,
     showPerf: false,
     recovery: { status: "idle", result: null, previewId: null },
@@ -403,17 +476,52 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
       if (choice === "mine") {
         client.send({ type: "load-scene", scene: offline.localScene });
       } else {
-        set({ scene: offline.serverScene, saveStatus: { state: "saved", savedAt: null, path: null } });
+        // Re-sync from the live server state rather than the snapshot taken when the dialog opened.
+        lastSeq = -1;
+        client.close();
+        client.connect();
       }
     },
 
+    setActiveRoom: (activeRoomId) => {
+      if (activeRoomId === get().activeRoomId || !get().scene.rooms.some((room) => room.id === activeRoomId)) return;
+      const selected = get().scene.furniture.find((item) => item.id === get().selectedEntityId);
+      set({ activeRoomId, selectedEntityId: selected && selected.roomId !== activeRoomId ? "" : get().selectedEntityId, sun: { ...get().sun, result: null, status: "idle" } });
+      requestValidation();
+      set((state) => ({ resetCameraSignal: state.resetCameraSignal + 1 }));
+    },
     selectEntity: (selectedEntityId) => {
       if (selectedEntityId === get().selectedEntityId) return;
+      // Selecting something on another floor switches to that floor.
+      const item = get().scene.furniture.find((entry) => entry.id === selectedEntityId);
+      const roomId = item?.roomId ?? (get().scene.rooms.some((room) => room.id === selectedEntityId) ? selectedEntityId : null);
+      if (roomId && roomId !== get().activeRoomId) {
+        set({ activeRoomId: roomId });
+        requestValidation();
+        set((state) => ({ resetCameraSignal: state.resetCameraSignal + 1 }));
+      }
       set({ selectedEntityId, mesh: { vertex: null, face: null } });
       if (get().tool === "vertex" || get().tool === "face") set({ tool: "translate" });
       client.send({ type: "presence", selectedId: selectedEntityId || null });
     },
     setTool: (tool) => set({ tool, mesh: { vertex: null, face: null } }),
+    rename: (name, color) => {
+      identity.name = name;
+      identity.color = color;
+      saveProfile(name, color);
+      client.send({ type: "rename", name, color });
+      set((state) => ({ peers: state.peers.map((peer) => (peer.clientId === state.selfId ? { ...peer, name, color } : peer)) }));
+    },
+    sendCursor: (cursor) => {
+      pendingCursor = cursor;
+      if (cursorTimer !== null) return;
+      cursorTimer = window.setTimeout(() => {
+        cursorTimer = null;
+        if (pendingCursor !== undefined) client.send({ type: "presence", cursor: pendingCursor ? { ...pendingCursor, x: Math.round(pendingCursor.x * 100) / 100, y: Math.round(pendingCursor.y * 100) / 100, z: Math.round(pendingCursor.z * 100) / 100 } : null });
+        pendingCursor = undefined;
+      }, 80);
+    },
+    setViewMode: (viewMode) => set((state) => ({ viewMode, resetCameraSignal: state.resetCameraSignal + 1, tool: state.tool === "vertex" || state.tool === "face" ? "select" : state.tool })),
     setMeshSelection: (selection) => set((state) => ({ mesh: { ...state.mesh, ...selection } })),
     requestCameraReset: () => set((state) => ({ resetCameraSignal: state.resetCameraSignal + 1 })),
     requestFocus: () => set((state) => ({ focusSignal: state.focusSignal + 1 })),
@@ -435,6 +543,28 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
       requestValidation();
     },
     revalidate: requestValidation,
+    runOptimization: () => {
+      optimizeId += 1;
+      set({ optimization: { status: "running", result: null, preview: false } });
+      worker.postMessage({ type: "optimize", id: optimizeId, scene: get().scene, roomId: get().activeRoomId } satisfies WorkerRequest);
+    },
+    applyOptimization: () => {
+      const result = get().optimization.result;
+      if (!result?.action) return;
+      if (get().dispatch(result.action)) {
+        set({ optimization: { status: "idle", result: null, preview: false } });
+        notify("success", `Layout optimized: score ${result.before.total} → ${result.after.total}. Undo with ⌘Z.`);
+      }
+    },
+    setOptimizationPreview: (preview) => set((state) => ({ optimization: { ...state.optimization, preview } })),
+    runSunStudy: (options = {}) => {
+      sunId += 1;
+      const timestamp = options.timestamp ?? get().sun.timestamp;
+      const mode = options.mode ?? get().sun.mode;
+      set((state) => ({ sun: { ...state.sun, status: "running", timestamp, mode } }));
+      worker.postMessage({ type: "sun", id: sunId, scene: get().scene, timestamp, mode, roomId: get().activeRoomId } satisfies WorkerRequest);
+    },
+    setSunOverlay: (overlay) => set((state) => ({ sun: { ...state.sun, overlay } })),
     setShowPerf: (showPerf) => set({ showPerf }),
     notify,
     dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((notice) => notice.id !== id) })),
@@ -446,11 +576,24 @@ let previousScene = useWorkspaceStore.getState().scene;
 useWorkspaceStore.subscribe((state) => {
   if (state.scene === previousScene) return;
   previousScene = state.scene;
+  if (!state.scene.rooms.some((room) => room.id === state.activeRoomId)) {
+    useWorkspaceStore.setState((current) => ({ activeRoomId: state.scene.rooms[0]?.id ?? "", resetCameraSignal: current.resetCameraSignal + 1 }));
+  }
   state.revalidate();
   if (state.recovery.status === "done" || state.recovery.status === "error") {
     useWorkspaceStore.setState({ recovery: { status: "idle", result: null, previewId: null } });
   }
+  // Optimization results describe the old scene; sun studies are cheap to refresh.
+  if (state.optimization.status === "done") useWorkspaceStore.setState({ optimization: { status: "idle", result: null, preview: false } });
+  if (state.sun.result) state.runSunStudy();
 });
+
+/** Today at 10:00 local time. */
+function defaultSunTime() {
+  const date = new Date();
+  date.setHours(10, 0, 0, 0);
+  return date.getTime();
+}
 
 export function downloadScene(scene: Scene) {
   const blob = new Blob([JSON.stringify(scene, null, 2)], { type: "application/json" });

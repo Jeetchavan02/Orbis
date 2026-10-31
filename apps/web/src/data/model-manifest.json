@@ -1,0 +1,54 @@
+{
+  "bed-queen": {
+    "asset": "GothicBed_01",
+    "file": "models/GothicBed_01/GothicBed_01_1k.gltf"
+  },
+  "sofa": {
+    "asset": "sofa_02",
+    "file": "models/sofa_02/sofa_02_1k.gltf"
+  },
+  "armchair": {
+    "asset": "ArmChair_01",
+    "file": "models/ArmChair_01/ArmChair_01_1k.gltf"
+  },
+  "coffee-table": {
+    "asset": "modern_coffee_table_01",
+    "file": "models/modern_coffee_table_01/modern_coffee_table_01_1k.gltf"
+  },
+  "dining-table": {
+    "asset": "dining_table",
+    "file": "models/dining_table/dining_table_1k.gltf"
+  },
+  "dining-chair": {
+    "asset": "dining_chair_02",
+    "file": "models/dining_chair_02/dining_chair_02_1k.gltf"
+  },
+  "desk": {
+    "asset": "metal_office_desk",
+    "file": "models/metal_office_desk/metal_office_desk_1k.gltf"
+  },
+  "nightstand": {
+    "asset": "ClassicNightstand_01",
+    "file": "models/ClassicNightstand_01/ClassicNightstand_01_1k.gltf"
+  },
+  "wardrobe": {
+    "asset": "drawer_cabinet",
+    "file": "models/drawer_cabinet/drawer_cabinet_1k.gltf"
+  },
+  "dresser": {
+    "asset": "painted_wooden_cabinet",
+    "file": "models/painted_wooden_cabinet/painted_wooden_cabinet_1k.gltf"
+  },
+  "bookshelf": {
+    "asset": "wooden_bookshelf_worn",
+    "file": "models/wooden_bookshelf_worn/wooden_bookshelf_worn_1k.gltf"
+  },
+  "tv-unit": {
+    "asset": "modern_wooden_cabinet",
+    "file": "models/modern_wooden_cabinet/modern_wooden_cabinet_1k.gltf"
+  },
+  "desk-lamp": {
+    "asset": "desk_lamp_arm_01",
+    "file": "models/desk_lamp_arm_01/desk_lamp_arm_01_1k.gltf"
+  }
+}

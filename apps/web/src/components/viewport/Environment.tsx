@@ -47,7 +47,7 @@ function sunDirection(elevation: number, azimuth: number) {
   return new Vector3().setFromSphericalCoords(1, phi, theta);
 }
 
-export function SceneEnvironment({ mode, room, shadows }: { mode: EnvironmentMode; room: Room; shadows: boolean }) {
+export function SceneEnvironment({ mode, room, shadows, plan = false }: { mode: EnvironmentMode; room: Room; shadows: boolean; plan?: boolean }) {
   const preset = PRESETS[mode];
   const sunRef = useRef<DirectionalLight>(null);
   const { gl, scene } = useThree();
@@ -57,8 +57,9 @@ export function SceneEnvironment({ mode, room, shadows }: { mode: EnvironmentMod
 
   useEffect(() => {
     gl.toneMappingExposure = preset.exposure;
-    scene.background = new Color(preset.background);
-  }, [gl, scene, preset]);
+    // Plan view uses a neutral drafting background (the sky shader does not work with orthographic cameras).
+    scene.background = new Color(plan ? "#eef1f3" : preset.background);
+  }, [gl, scene, preset, plan]);
 
   useEffect(() => {
     const light = sunRef.current;
@@ -80,8 +81,8 @@ export function SceneEnvironment({ mode, room, shadows }: { mode: EnvironmentMod
 
   return (
     <>
-      {preset.sky ? <Sky distance={4500} sunPosition={direction.clone().multiplyScalar(100).toArray()} {...preset.sky} /> : null}
-      {mode === "night" ? <Stars radius={90} depth={40} count={2500} factor={3} saturation={0} fade speed={0.4} /> : null}
+      {preset.sky && !plan ? <Sky distance={4500} sunPosition={direction.clone().multiplyScalar(100).toArray()} {...preset.sky} /> : null}
+      {mode === "night" && !plan ? <Stars radius={90} depth={40} count={2500} factor={3} saturation={0} fade speed={0.4} /> : null}
       <hemisphereLight args={[preset.hemiSky, preset.hemiGround, preset.hemiIntensity]} />
       <directionalLight
         ref={sunRef}

@@ -77,13 +77,22 @@ Verified in the browser (two tabs) and by `npm test` (35 tests), `npm run typech
 **Req 6 — Performance** [x] 500/1000-object stress scenes · [x] worker validation · [x] live overlay (measured: FPS, draw calls, validation ms, naive/broad/narrow pairs) · [x] low-detail rendering >150 objects · [x] memoized items · [x] BVH raycast for big meshes. Measured: 500 objects → 60 FPS, 17 broad-phase pairs of 124,750, ~10–50 ms validation in worker.
 **Req 7 — History/persistence** [x] inverse-action stack for every action type · [x] autosave + save to `server/data/scenes` · [x] export/open JSON (schema-validated) · [x] restore verified across server restart
 **Lighting (Phase 7)** [x] Day/Evening/Night presets (sky, sun, shadows, stars) · [x] per-fixture point/spot lights, on/off, intensity, colour temperature, persisted/undoable
-**Optional (Phase 8)** [ ] AI assistant (needs an API key in server `.env`) · [ ] layout score/optimizer · [ ] Vastu packs · [ ] SunCalc sunlight · [ ] image-to-room
+**Optional (Phase 8)** [x] AI assistant (Gemini, server-side; tool calls → canonical actions → engine validation → up to 3 corrections → user applies as one undoable action) · [x] image-to-room (Gemini vision → schema-validated extraction → editable scene preview) · [x] layout score 0–100 (validity 40, circulation 20, wall alignment 15, daylight 15, balance 10) + seeded hill-climb optimizer (every step revalidated; locked objects fixed) · [x] Vastu JSON rule pack (`fixtures/vastu-guidelines.json`, advisory, uses `environment.northOffsetDegrees`) · [x] SunCalc sunlight study (rays through window openings, furniture occlusion, instant or whole-day heat map; assumptions shown)
+  - Key: `GEMINI_API_KEY` in `apps/.env` (loaded by the server only). Model chain: `GEMINI_MODEL` → gemini-flash-latest → gemini-3.5-flash → gemini-flash-lite-latest, with 5-min cooldown for overloaded/retired models. Never use `VITE_`-prefixed keys (they can reach the browser bundle).
+
+### Latest additions (2026-11-01)
+- **Direct manipulation (Planner 5D-style):** press-and-drag furniture on the floor (5 cm snap, Alt = free, magnetic walls, live red/green collision ring), rotation ring with 15° snaps, floating action bar (duplicate, rotate, elevation drag, frame, lock, delete), arrow-key nudge. Axis gizmos remain as W/E/R. Code: `web/src/components/viewport/Interaction.tsx`.
+- **Multi-floor:** rooms at different `position.y` are storeys; engine heights are floor-relative (`isWalkingObstacle(item, floorY)`), clearance/door checks are room-scoped. UI: floor switcher, floors above the active one hidden, placement/score/sun/Vastu/AI follow `activeRoomId`.
+- **Demo apartment:** `fixtures/apartment-scene.json` (3 floors, 41 objects, 0 issues), regenerate with `npx tsx server/scripts/generate-apartment.mts`.
+- **Realistic models:** 13 CC0 Poly Haven glTFs in `web/public/models/` (see LICENSE.md), mapped in `web/src/data/model-manifest.json`, fitted to each object's bounding box (`RealisticModel.tsx`); procedural fallback while loading and for unmatched items.
+- **AI:** two Gemini models raced in parallel; semantic tools `place_against_wall` / `place_near` where the engine computes coordinates (≈8 s, first-attempt success in testing vs 40–120 s before).
+- **Sync robustness:** seq-gap detection triggers resync; same-tab reconnect replaces stale server connection; HMR closes old sockets; stale offline-reconcile snapshot fixed.
 
 ### Known limitations / next
 - Single room per scene in the UI (engine supports many rooms).
 - Imported GLB keeps geometry only (one material colour).
 - Evening lighting could be tuned further; FPS in the Claude preview pane is throttled for the screenshotted tab — measure in a normal browser.
-- Next: Phase 8 optional intelligence, then Phase 9 polish.
+- Next: Phase 9 polish (evening lighting tuning, multi-room UI, multi-vertex selection).
 
 ### Architecture notes
 - `applySceneAction(scene, action)` → `{ scene, inverse }`: pure, never mutates, throws `SceneActionError`. Spatial validity is never checked there.

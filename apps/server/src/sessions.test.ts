@@ -91,4 +91,11 @@ describe("authoritative collaboration session", () => {
     session.disconnect(alice.handle);
     expect(session.peers.map((peer) => peer.name)).toEqual(["Bob"]);
   });
+
+  it("replaces a stale connection when the same tab reconnects", () => {
+    const session = new SceneSession(bedroom);
+    client(session, "Alice");
+    client(session, "Alice");
+    expect(session.peers.filter((peer) => peer.clientId === "alice")).toHaveLength(1);
+  });
 });

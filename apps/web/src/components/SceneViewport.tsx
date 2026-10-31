@@ -1,9 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Edges, Grid, Html, Line, OrbitControls, TransformControls } from "@react-three/drei";
-import { Plane, Raycaster, Shape, Vector2, Vector3, type Group, type Object3D } from "three";
-import type { FurnitureObject, FurniturePatch, Scene, ValidationIssue } from "@reality-builder/shared";
-import type { RecoveryCandidate } from "@reality-builder/spatial-engine";
+import { Edges, Grid, Html, Line, OrbitControls, OrthographicCamera, PerspectiveCamera, TransformControls } from "@react-three/drei";
+import { CanvasTexture, MOUSE, NearestFilter, Plane, Raycaster, Shape, SRGBColorSpace, Vector2, Vector3, type Group, type Object3D } from "three";
+import type { FurnitureObject, FurniturePatch, Room, Scene, ValidationIssue } from "@reality-builder/shared";
+import type { SunStudy } from "@reality-builder/spatial-engine";
 import { useWorkspaceStore, type TransformTool } from "../store/workspace";
 import { usePerfStore, viewportBridge } from "../lib/perf";
 import { useContextMenu } from "../lib/ui";
@@ -11,6 +11,9 @@ import { FurnitureModel } from "./viewport/FurnitureModel";
 import { RoomShell } from "./viewport/Room";
 import { ARTIFICIAL_LIGHT_FACTOR, SceneEnvironment } from "./viewport/Environment";
 import { MeshEditor } from "./viewport/MeshEditor";
+import { hasRealisticModel, preloadModels, RealisticModel } from "./viewport/RealisticModel";
+import { beginDrag, DragController, PresenceCursors, SelectionHandles } from "./viewport/Interaction";
+import { PlacementController, PlacementGhost } from "./viewport/Placement";
 
 const DEG = Math.PI / 180;
 const LOW_DETAIL_THRESHOLD = 150;
@@ -19,7 +22,7 @@ const round = (value: number, step = 0.001) => Math.round(value / step) * step;
 type Severity = "error" | "warning";
 
 const FurnitureItem = memo(function FurnitureItem({
-  item, selected, severity, peerColor, peerName, lowDetail, shadows, lightScale, groupRef, onSelect,
+  item, selected, severity, peerColor, peerName, lowDetail, shadows, lightScale, groupRef, onSelect, draggable,
 }: {
   item: FurnitureObject;
   selected: boolean;
@@ -31,6 +34,8 @@ const FurnitureItem = memo(function FurnitureItem({
   lightScale: number;
   groupRef?: (group: Group | null) => void;
   onSelect: (id: string) => void;
+  /** When true, pressing on the object starts a direct drag along the floor. */
+  draggable: boolean;
 }) {
   const { width, depth, height } = item.dimensions;
   const light = item.light;
@@ -41,10 +46,13 @@ const FurnitureItem = memo(function FurnitureItem({
       ref={groupRef}
       position={[item.position.x, item.position.y, item.position.z]}
       rotation={[0, item.yawDegrees * DEG, 0]}
-      onClick={(event) => {
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
         event.stopPropagation();
         onSelect(item.id);
+        if (draggable) beginDrag("move", item, event.eventObject as Group, event.nativeEvent.clientX, event.nativeEvent.clientY);
       }}
+      onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => {
         event.stopPropagation();
         event.nativeEvent.preventDefault();
@@ -52,7 +60,14 @@ const FurnitureItem = memo(function FurnitureItem({
         useContextMenu.getState().open(event.nativeEvent.clientX, event.nativeEvent.clientY, item.id);
       }}
     >
-      <FurnitureModel item={item} lowDetail={lowDetail} castShadow={shadows && !lowDetail} lightOn={lightOn} />
+      {!lowDetail && hasRealisticModel(item) ? (
+        // Procedural model shows while the photoreal glTF streams in.
+        <Suspense fallback={<FurnitureModel item={item} lowDetail={false} castShadow={false} lightOn={lightOn} />}>
+          <RealisticModel item={item} castShadow={shadows} />
+        </Suspense>
+      ) : (
+        <FurnitureModel item={item} lowDetail={lowDetail} castShadow={shadows && !lowDetail} lightOn={lightOn} />
+      )}
       {outline ? (
         <mesh position={[0, height / 2, 0]} raycast={() => null}>
           <boxGeometry args={[width + 0.02, height + 0.02, depth + 0.02]} />
@@ -102,10 +117,12 @@ function FloorZone({ polygon, color, opacity = 0.28 }: { polygon: [number, numbe
   );
 }
 
-function RecoveryPreview({ candidate, scene }: { candidate: RecoveryCandidate; scene: Scene }) {
+type PreviewMove = { objectId: string; from: { x: number; z: number }; to: { x: number; z: number; yawDegrees: number } };
+
+function RecoveryPreview({ moves, scene }: { moves: PreviewMove[]; scene: Scene }) {
   return (
     <group>
-      {candidate.moves.map((move) => {
+      {moves.map((move) => {
         const item = scene.furniture.find((entry) => entry.id === move.objectId);
         if (!item) return null;
         const { width, depth, height } = item.dimensions;
@@ -126,17 +143,69 @@ function RecoveryPreview({ candidate, scene }: { candidate: RecoveryCandidate; s
   );
 }
 
-function CameraRig({ scene, selectedId }: { scene: Scene; selectedId: string }) {
+/** Floor heat map of direct sun, drawn into a canvas texture aligned with the study grid. */
+function SunOverlay({ study, room }: { study: SunStudy; room: Room }) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = study.columns;
+    canvas.height = study.rows;
+    const context = canvas.getContext("2d")!;
+    const image = context.createImageData(study.columns, study.rows);
+    const max = study.mode === "daily" ? Math.max(0.5, ...study.values) : 1;
+    study.values.forEach((value, index) => {
+      const t = Math.min(1, value / max);
+      image.data[index * 4] = 255;
+      image.data[index * 4 + 1] = Math.round(200 - 90 * t);
+      image.data[index * 4 + 2] = Math.round(60 - 40 * t);
+      image.data[index * 4 + 3] = value > 0 ? Math.round(70 + 120 * t) : 0;
+    });
+    context.putImageData(image, 0, 0);
+    const result = new CanvasTexture(canvas);
+    result.magFilter = NearestFilter;
+    result.colorSpace = SRGBColorSpace;
+    return result;
+  }, [study]);
+  useEffect(() => () => texture.dispose(), [texture]);
+  const width = study.columns * study.cellSize;
+  const depth = study.rows * study.cellSize;
+  return (
+    <group position={[room.position.x, room.position.y + 0.02, room.position.z]} rotation={[0, room.yawDegrees * DEG, 0]}>
+      <mesh position={[-room.dimensions.width / 2 + width / 2, 0, -room.dimensions.depth / 2 + depth / 2]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} renderOrder={1}>
+        <planeGeometry args={[width, depth]} />
+        <meshBasicMaterial map={texture} transparent depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function CameraRig({ scene, selectedId, room }: { scene: Scene; selectedId: string; room: Room | undefined }) {
   const controlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
   const resetSignal = useWorkspaceStore((state) => state.resetCameraSignal);
   const focusSignal = useWorkspaceStore((state) => state.focusSignal);
-  const { camera } = useThree();
-  const room = scene.rooms[0];
+  const viewMode = useWorkspaceStore((state) => state.viewMode);
+  const get = useThree((state) => state.get);
   const span = room ? Math.max(room.dimensions.width, room.dimensions.depth) : 6;
+  const plan = viewMode === "2d";
 
   const frame = (center: Vector3, radius: number) => {
     const controls = controlsRef.current;
+    // Always the currently active camera (it changes when switching 2D/3D).
+    const { camera, size } = get();
     if (!controls) return;
+    // Controls may have bound to the previous camera during the 2D/3D swap.
+    (controls as unknown as { object: typeof camera }).object = camera;
+    if (plan) {
+      // Straight down, north (−Z) at the top; zoom = pixels per metre to fit the area.
+      camera.position.set(center.x, center.y + 40, center.z + 0.0001);
+      const ortho = camera as unknown as { zoom: number; updateProjectionMatrix: () => void };
+      const extent = Math.max(radius * 2.4, 1.5);
+      ortho.zoom = Math.min(size.width, size.height) / extent;
+      ortho.updateProjectionMatrix();
+      controls.target.set(center.x, center.y, center.z);
+      camera.lookAt(center);
+      controls.update();
+      return;
+    }
     const direction = new Vector3(0.62, 0.78, 0.92).normalize();
     camera.position.copy(center).addScaledVector(direction, Math.max(2.2, radius * 2.3));
     controls.target.copy(center);
@@ -144,9 +213,12 @@ function CameraRig({ scene, selectedId }: { scene: Scene; selectedId: string }) 
   };
 
   useEffect(() => {
-    if (room) frame(new Vector3(room.position.x, 0.6, room.position.z), span * 0.75);
-    // Re-frame only when the room itself changes size or a reset is requested.
-  }, [resetSignal, room?.id, span]);
+    if (!room) return;
+    // Wait one frame so a freshly mounted camera is the active one.
+    const id = requestAnimationFrame(() => frame(new Vector3(room.position.x, room.position.y + (plan ? 0 : 0.6), room.position.z), plan ? Math.max(room.dimensions.width, room.dimensions.depth) / 2 + 0.6 : span * 0.75));
+    return () => cancelAnimationFrame(id);
+    // Re-frame when the active room or view mode changes, or a reset is requested.
+  }, [resetSignal, room?.id, span, plan]);
 
   useEffect(() => {
     if (focusSignal === 0) return;
@@ -154,7 +226,29 @@ function CameraRig({ scene, selectedId }: { scene: Scene; selectedId: string }) 
     if (item) frame(new Vector3(item.position.x, item.position.y + item.dimensions.height / 2, item.position.z), Math.max(item.dimensions.width, item.dimensions.depth, item.dimensions.height));
   }, [focusSignal]);
 
-  return <OrbitControls ref={controlsRef} makeDefault minDistance={1} maxDistance={span * 4 + 20} maxPolarAngle={Math.PI * 0.495} enableDamping dampingFactor={0.1} />;
+  return (
+    <>
+      {plan
+        ? <OrthographicCamera key="plan" makeDefault near={0.1} far={200} position={[0, 40, 0]} zoom={60} />
+        : <PerspectiveCamera key="persp" makeDefault fov={40} near={0.05} far={600} position={[7, 6.5, 8]} />}
+      <OrbitControls
+        key={plan ? "plan-controls" : "orbit-controls"}
+        ref={controlsRef}
+        makeDefault
+        enableRotate={!plan}
+        screenSpacePanning
+        minPolarAngle={plan ? 0 : 0}
+        maxPolarAngle={plan ? 0 : Math.PI * 0.495}
+        minDistance={1}
+        maxDistance={span * 4 + 20}
+        minZoom={8}
+        maxZoom={600}
+        mouseButtons={plan ? { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN } : { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
+        enableDamping
+        dampingFactor={0.1}
+      />
+    </>
+  );
 }
 
 function PerfProbe() {
@@ -209,13 +303,20 @@ export function SceneViewport() {
   const peers = useWorkspaceStore((state) => state.peers);
   const selfId = useWorkspaceStore((state) => state.selfId);
   const recovery = useWorkspaceStore((state) => state.recovery);
+  const optimization = useWorkspaceStore((state) => state.optimization);
+  const sun = useWorkspaceStore((state) => state.sun);
   const { selectEntity, dispatch } = useWorkspaceStore.getState();
 
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const dragBase = useRef<Record<string, number> | null>(null);
-  const room = scene.rooms[0];
+  const activeRoomId = useWorkspaceStore((state) => state.activeRoomId);
+  const viewMode = useWorkspaceStore((state) => state.viewMode);
+  const room = scene.rooms.find((entry) => entry.id === activeRoomId) ?? scene.rooms[0];
+  // Floors above the active one are hidden (like switching storeys in a floor planner).
+  const visibleRooms = useMemo(() => new Set(scene.rooms.filter((entry) => !room || entry.position.y <= room.position.y + 0.01).map((entry) => entry.id)), [scene.rooms, room]);
   const lowDetail = scene.furniture.length > LOW_DETAIL_THRESHOLD;
-  const shadows = scene.environment.shadows && !lowDetail;
+  // Plans read best flat: no sun shadows in 2D.
+  const shadows = scene.environment.shadows && !lowDetail && viewMode !== "2d";
   const lightScale = scene.environment.artificialLightScale * ARTIFICIAL_LIGHT_FACTOR[scene.environment.mode];
   const selectedItem = scene.furniture.find((item) => item.id === selectedId);
 
@@ -241,6 +342,18 @@ export function SceneViewport() {
     for (const peer of peers) if (peer.clientId !== selfId && peer.selectedId) map.set(peer.selectedId, { color: peer.color, name: peer.name });
     return map;
   }, [peers, selfId]);
+
+  // A rejected (conflicting) edit leaves the dragged group where it was dropped; restore canonical state.
+  const conflict = useWorkspaceStore((state) => state.conflict);
+  useEffect(() => {
+    if (!conflict || !selectedGroup || !selectedItem) return;
+    selectedGroup.position.set(selectedItem.position.x, selectedItem.position.y, selectedItem.position.z);
+    selectedGroup.rotation.set(0, selectedItem.yawDegrees * DEG, 0);
+  }, [conflict]);
+
+  useEffect(() => {
+    if (!lowDetail) preloadModels(new Set(scene.furniture.map((item) => item.catalogItemId ?? "")));
+  }, [scene.furniture, lowDetail]);
 
   const previewCandidate = recovery.result?.candidates.find((candidate) => candidate.id === recovery.previewId) ?? null;
   const editingMesh = tool === "vertex" || tool === "face";
@@ -285,12 +398,12 @@ export function SceneViewport() {
         if (event.button === 0 && !editingMesh) selectEntity("");
       }}
     >
-      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} />
+      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} plan={viewMode === "2d"} />
       {room ? (
         <>
           <Grid
             args={[60, 60]}
-            position={[room.position.x, -0.125, room.position.z]}
+            position={[room.position.x, room.position.y - 0.125, room.position.z]}
             cellSize={0.5}
             cellThickness={0.5}
             cellColor={scene.environment.mode === "night" ? "#27344a" : "#b8c2bc"}
@@ -301,14 +414,17 @@ export function SceneViewport() {
             fadeStrength={1.4}
             infiniteGrid
           />
-          {scene.rooms.map((entry) => (
-            <RoomShell key={entry.id} room={entry} cutaway showDimensions={!lowDetail} />
+          {scene.rooms.filter((entry) => visibleRooms.has(entry.id)).map((entry) => (
+            <RoomShell key={entry.id} room={entry} cutaway showDimensions={!lowDetail && entry.id === room.id} />
           ))}
         </>
       ) : null}
       {scene.furniture.map((item) => {
         // While its mesh is edited, the MeshEditor renders the object instead (and must receive the clicks).
         if (editingMesh && item.id === selectedId) return null;
+        if (!visibleRooms.has(item.roomId)) return null;
+        // Plan view: hide ceiling-mounted fixtures so they don't cover the floor plan.
+        if (viewMode === "2d" && item.position.y - (scene.rooms.find((entry) => entry.id === item.roomId)?.position.y ?? 0) > 1.9) return null;
         const peer = peerSelections.get(item.id);
         return (
           <FurnitureItem
@@ -323,6 +439,7 @@ export function SceneViewport() {
             lightScale={lightScale}
             groupRef={item.id === selectedId ? setSelectedGroup : undefined}
             onSelect={selectEntity}
+            draggable={tool === "select" || tool === "translate" || tool === "rotate"}
           />
         );
       })}
@@ -330,8 +447,13 @@ export function SceneViewport() {
       {showRoutes ? validation?.routes.map((route) => (
         <Line key={route.targetId} points={route.points.map(([x, z]) => [x, 0.03, z] as [number, number, number])} color="#3b82d9" lineWidth={2} transparent opacity={0.8} />
       )) : null}
-      {previewCandidate ? <RecoveryPreview candidate={previewCandidate} scene={scene} /> : null}
-      {selectedItem && selectedGroup && !editingMesh && tool !== "select" && !selectedItem.constraints?.locked ? (
+      {previewCandidate ? <RecoveryPreview moves={previewCandidate.moves} scene={scene} /> : null}
+      {optimization.preview && optimization.result ? (
+        <RecoveryPreview scene={scene} moves={optimization.result.moves.map((move) => ({ objectId: move.objectId, from: { x: move.from[0], z: move.from[1] }, to: { x: move.to[0], z: move.to[1], yawDegrees: move.yawTo } }))} />
+      ) : null}
+      {sun.overlay && sun.result && room ? <SunOverlay study={sun.result} room={room} /> : null}
+      {selectedItem && selectedGroup && !editingMesh && tool !== "scale" ? <SelectionHandles key={selectedItem.id + ":" + selectedItem.version} item={selectedItem} group={selectedGroup} /> : null}
+      {selectedItem && selectedGroup && !editingMesh && (tool === "translate" || tool === "rotate" || tool === "scale") && !selectedItem.constraints?.locked ? (
         <TransformControls
           object={selectedGroup as Object3D}
           mode={tool as Exclude<TransformTool, "select" | "vertex" | "face">}
@@ -349,7 +471,11 @@ export function SceneViewport() {
         />
       ) : null}
       {selectedItem && editingMesh ? <MeshEditor item={selectedItem} mode={tool} /> : null}
-      <CameraRig scene={scene} selectedId={selectedId} />
+      <CameraRig scene={scene} selectedId={selectedId} room={room} />
+      <DragController />
+      <PlacementController />
+      <PresenceCursors />
+      <PlacementGhost />
       <DropBridge />
       {showPerf ? <PerfProbe /> : null}
     </Canvas>

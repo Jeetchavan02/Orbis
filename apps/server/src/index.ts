@@ -4,10 +4,18 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
-import { ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { networkInterfaces } from "node:os";
+import { AiEditRequestSchema, AiImageRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
+import { AiUnavailableError, aiModel, runAiEdit, runImageToRoom } from "./ai.js";
 import { SceneSession, type ClientHandle } from "./sessions.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Secrets live in apps/.env (or server/.env); they are only ever read on the server.
+for (const file of [resolve(here, "../.env"), resolve(here, "../../.env")]) {
+  if (existsSync(file)) process.loadEnvFile(file);
+}
 const DATA_DIR = resolve(here, "../data/scenes");
 const DEFAULT_FIXTURE = resolve(here, "../../fixtures/bedroom-scene.json");
 const SCENE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -77,6 +85,42 @@ app.get("/api/scenes/:id", async (request, response) => {
   response.json({ scene: session.scene, seq: session.seq, savedAt: lastSaved.get(request.params.id) ?? null });
 });
 
+const newId = () => "ai-" + randomUUID().slice(0, 8);
+
+/** LAN addresses so the Share dialog can offer links other devices can open. */
+app.get("/api/network", (_request, response) => {
+  const addresses = Object.values(networkInterfaces()).flat()
+    .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry!.address);
+  response.json({ addresses });
+});
+
+app.get("/api/ai/status", (_request, response) => {
+  response.json({ available: !!process.env.GEMINI_API_KEY, model: aiModel() });
+});
+
+app.post("/api/ai/edit", async (request, response) => {
+  const parsed = AiEditRequestSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid request: " + parsed.error.issues[0]?.message });
+  try {
+    response.json(await runAiEdit(parsed.data, newId));
+  } catch (error) {
+    console.error("AI edit failed", error);
+    response.status(error instanceof AiUnavailableError ? 503 : 502).json({ error: (error as Error).message });
+  }
+});
+
+app.post("/api/ai/image-to-room", async (request, response) => {
+  const parsed = AiImageRequestSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid request: " + parsed.error.issues[0]?.message });
+  try {
+    response.json(await runImageToRoom(parsed.data, newId));
+  } catch (error) {
+    console.error("Image-to-room failed", error);
+    response.status(error instanceof AiUnavailableError ? 503 : 502).json({ error: (error as Error).message });
+  }
+});
+
 websocketServer.on("connection", (socket: WebSocket, request) => {
   const url = new URL(request.url ?? "/ws", "http://localhost");
   const sceneId = url.searchParams.get("scene") ?? "default";
@@ -88,6 +132,7 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     send: (message: ServerMessage) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
     },
+    close: () => socket.close(4000, "Replaced by a newer connection from the same tab"),
   };
   const ready = getSession(sceneId).then((session) => {
     session.connect(handle);

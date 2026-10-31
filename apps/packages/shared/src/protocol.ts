@@ -4,11 +4,15 @@ import { FurnitureObjectSchema, RoomSchema, SceneActionSchema, SceneSchema } fro
 /** Versions the client believed each touched entity had when it created the action. "scene" = settings. */
 export const BaseVersionsSchema = z.record(z.string(), z.number().int().nonnegative());
 
+/** A collaborator's pointer on the floor (world metres), for live cursors. */
+export const CursorSchema = z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite(), roomId: z.string() });
+
 export const PeerSchema = z.object({
   clientId: z.string().min(1),
   name: z.string().min(1),
   color: z.string(),
   selectedId: z.string().nullable(),
+  cursor: CursorSchema.nullable().default(null),
 });
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [
@@ -21,7 +25,8 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     /** History label for the submitting client; echoed back. */
     label: z.string().min(1),
   }),
-  z.object({ type: z.literal("presence"), selectedId: z.string().nullable() }),
+  z.object({ type: z.literal("presence"), selectedId: z.string().nullable().optional(), cursor: CursorSchema.nullable().optional() }),
+  z.object({ type: z.literal("rename"), name: z.string().trim().min(1).max(40), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
   z.object({ type: z.literal("save") }),
   z.object({ type: z.literal("load-scene"), scene: SceneSchema }),
 ]);

@@ -27,6 +27,9 @@ export const OpeningSchema = z.object({
   height: z.number().positive(),
   /** Bottom of the opening above the floor; 0 for doors. */
   sillHeight: z.number().nonnegative(),
+  /** Doors: hinge side as seen from inside the room facing the door, and which way the leaf swings. */
+  hinge: z.enum(["left", "right"]).default("left"),
+  swing: z.enum(["in", "out"]).default("in"),
 });
 
 export const RoomSchema = z.object({
@@ -106,6 +109,8 @@ export const RuleSettingsSchema = z.object({
   boundaries: z.boolean().default(true),
   clearances: z.boolean().default(true),
   pathways: z.boolean().default(true),
+  /** Optional Vastu guidelines: advisory only, never affect validity. */
+  vastu: z.boolean().default(false),
   /** Narrowest passage a person can walk through, meters. */
   minPassageWidth: z.number().positive().default(0.6),
   /** Default front clearance per category, meters. */
@@ -127,6 +132,11 @@ export const EnvironmentSchema = z.object({
   /** Scales every artificial light at once. */
   artificialLightScale: z.number().nonnegative().default(1),
   shadows: z.boolean().default(true),
+  /** Site used for sun studies (default: Mumbai). */
+  latitude: z.number().min(-90).max(90).default(19.076),
+  longitude: z.number().min(-180).max(180).default(72.877),
+  /** Compass bearing of the room's −Z ("north" wall) direction; 0 = true north. */
+  northOffsetDegrees: z.number().finite().default(0),
 });
 
 export const SceneSchema = z.object({
@@ -138,6 +148,8 @@ export const SceneSchema = z.object({
   furniture: z.array(FurnitureObjectSchema),
   rules: RuleSettingsSchema.default({}),
   environment: EnvironmentSchema.default({}),
+  /** Room type chosen at project creation (bedroom, living, …); drives library suggestions. */
+  roomType: z.string().optional(),
   /** Version of scene-level settings (name, rules, environment). */
   settingsVersion: z.number().int().nonnegative().default(1),
 });

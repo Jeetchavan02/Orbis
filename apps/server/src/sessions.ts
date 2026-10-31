@@ -12,7 +12,7 @@ import {
   type ServerMessage,
 } from "@reality-builder/shared";
 
-export type ClientHandle = { send: (message: ServerMessage) => void };
+export type ClientHandle = { send: (message: ServerMessage) => void; close?: () => void };
 
 type Connected = { handle: ClientHandle; peer: Peer | null };
 
@@ -65,14 +65,31 @@ export class SceneSession {
 
     switch (message.type) {
       case "hello": {
-        client.peer = { clientId: message.clientId, name: message.name, color: message.color, selectedId: null };
+        // A reconnecting tab reuses its clientId: drop the stale connection so presence has no duplicates.
+        for (const [other, entry] of this.clients) {
+          if (other !== handle && entry.peer?.clientId === message.clientId) {
+            this.clients.delete(other);
+            other.close?.();
+          }
+        }
+        client.peer = { clientId: message.clientId, name: message.name, color: message.color, selectedId: null, cursor: null };
         handle.send({ type: "welcome", scene: this.scene, seq: this.seq, peers: this.peers, selfId: message.clientId });
         this.broadcastPeers();
         return;
       }
       case "presence": {
         if (!client.peer) return;
-        client.peer = { ...client.peer, selectedId: message.selectedId };
+        client.peer = {
+          ...client.peer,
+          ...(message.selectedId !== undefined ? { selectedId: message.selectedId } : {}),
+          ...(message.cursor !== undefined ? { cursor: message.cursor } : {}),
+        };
+        this.broadcastPeers();
+        return;
+      }
+      case "rename": {
+        if (!client.peer) return;
+        client.peer = { ...client.peer, name: message.name, color: message.color };
         this.broadcastPeers();
         return;
       }
