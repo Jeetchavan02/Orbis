@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "scene-studio-001",
+  "name": "Quiet afternoon studio",
+  "coordinateSystem": "y-up-xz-meters",
+  "rooms": [
+    {
+      "id": "room-living",
+      "name": "Living room",
+      "position": { "x": 0, "y": 0, "z": 0 },
+      "dimensions": {
+        "width": 7.2,
+        "depth": 5.8,
+        "height": 2.9,
+        "wallThickness": 0.14
+      },
+      "yawDegrees": 0
+    }
+  ],
+  "furniture": [
+    {
+      "id": "furniture-sofa",
+      "roomId": "room-living",
+      "name": "Sofa",
+      "category": "seating",
+      "catalogItemId": "sample-sofa",
+      "position": { "x": 0, "y": 0, "z": -1.45 },
+      "yawDegrees": 0,
+      "dimensions": { "width": 2.35, "depth": 0.92, "height": 0.82 },
+      "color": "#b7a18a"
+    },
+    {
+      "id": "furniture-table",
+      "roomId": "room-living",
+      "name": "Coffee table",
+      "category": "tables",
+      "catalogItemId": "sample-coffee-table",
+      "position": { "x": 0, "y": 0, "z": 0.15 },
+      "yawDegrees": 0,
+      "dimensions": { "width": 1.2, "depth": 0.68, "height": 0.38 },
+      "color": "#8a6248"
+    },
+    {
+      "id": "furniture-chair",
+      "roomId": "room-living",
+      "name": "Lounge chair",
+      "category": "seating",
+      "catalogItemId": "sample-lounge-chair",
+      "position": { "x": 1.95, "y": 0, "z": 0.65 },
+      "yawDegrees": -28,
+      "dimensions": { "width": 0.86, "depth": 0.82, "height": 0.9 },
+      "color": "#718b7c"
+    },
+    {
+      "id": "furniture-rug",
+      "roomId": "room-living",
+      "name": "Woven rug",
+      "category": "decor",
+      "catalogItemId": "sample-rug",
+      "position": { "x": 0, "y": 0, "z": 0.15 },
+      "yawDegrees": 0,
+      "dimensions": { "width": 3.1, "depth": 2.1, "height": 0.035 },
+      "color": "#d8d0c4"
+    }
+  ]
+}
