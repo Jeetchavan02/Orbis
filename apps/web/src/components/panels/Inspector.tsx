@@ -12,17 +12,66 @@ import {
   type WallSide,
 } from "@reality-builder/shared";
 import { requiredFrontClearance } from "@reality-builder/spatial-engine";
-import { CATEGORY_LABELS } from "../../data/catalog";
+import { catalogById, CATEGORY_LABELS, GROUPS, ROOM_TYPES, type CatalogItem } from "../../data/catalog";
+import { placeEntry, usePlacement } from "../../lib/placement";
+import { useThumbnail } from "../../lib/thumbnails";
+import { GroupIcon } from "./Library";
 import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { commitMesh } from "../viewport/MeshEditor";
 import { ColorField, NumberField, Section, Toggle } from "./fields";
 
+/** Details of a library item the user just picked (before it is placed). */
+function CatalogDetails({ entry }: { entry: CatalogItem }) {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const thumbnail = useThumbnail(entry, element);
+  const roomLabels = ROOM_TYPES.filter((room) => entry.rooms.includes(room.id)).map((room) => room.label);
+  const clearance = entry.constraints?.frontClearance ?? useWorkspaceStore.getState().scene.rules.categoryClearance[entry.category] ?? 0;
+  const { width, depth, height } = entry.dimensions;
+  return (
+    <div className="inspector-scroll">
+      <div ref={setElement} className="catalog-preview">{thumbnail ? <img src={thumbnail} alt={entry.name} /> : <GroupIcon group={entry.group} size={40} />}</div>
+      <div className="entity-card">
+        <div className="entity-card-copy">
+          <strong>{entry.name}</strong>
+          <span className="catalog-group"><GroupIcon group={entry.group} size={13} /> {GROUPS[entry.group].label} · library item</span>
+        </div>
+      </div>
+      <Section title="Dimensions">
+        <div className="spec-grid">
+          <span>Width</span><strong>{width.toFixed(2)} m</strong>
+          <span>Depth</span><strong>{depth.toFixed(2)} m</strong>
+          <span>Height</span><strong>{height.toFixed(2)} m</strong>
+          {entry.elevation ? <><span>Mounted at</span><strong>{entry.elevation.toFixed(2)} m</strong></> : null}
+        </div>
+      </Section>
+      <Section title="Details">
+        <div className="spec-grid">
+          <span>Material</span><strong><span className="spec-swatch" style={{ background: entry.color }} /> {entry.color.toUpperCase()}</strong>
+          {entry.opening ? <><span>Type</span><strong>{entry.opening.kind === "door" ? "Door (wall opening)" : "Window (wall opening)"}</strong></> : null}
+          {!entry.opening ? <><span>Front clearance</span><strong>{entry.constraints?.floorCovering ? "None (floor covering)" : clearance > 0 ? `${clearance.toFixed(2)} m` : "None"}</strong></> : null}
+          {entry.light ? <><span>Light</span><strong>{entry.light.kind === "spot" ? "Spotlight" : "Point light"}, {entry.light.intensity} cd</strong></> : null}
+        </div>
+        {roomLabels.length ? <div className="room-chips">{roomLabels.map((label) => <span key={label}>{label}</span>)}</div> : null}
+      </Section>
+      <p className="field-note">{entry.opening ? "Click a spot near a wall to add it there, or drag it onto the room." : "Click the floor to place it, drag it into the room, or use the button below."}</p>
+      <div className="inspector-actions">
+        <button type="button" className="ghost-button" onClick={() => usePlacement.getState().cancel()}>Cancel</button>
+        <button type="button" className="primary-button" onClick={() => { usePlacement.getState().cancel(); placeEntry(entry.id); }}><Plus size={14} /> Place in room</button>
+      </div>
+    </div>
+  );
+}
+
 export function Inspector() {
   const scene = useWorkspaceStore((state) => state.scene);
   const selectedId = useWorkspaceStore((state) => state.selectedEntityId);
+  const pickedId = usePlacement((state) => state.entryId);
   const item = scene.furniture.find((entry) => entry.id === selectedId);
   const room = scene.rooms.find((entry) => entry.id === selectedId);
+  const picked = catalogById(pickedId ?? undefined);
 
+  // A freshly picked library item takes precedence until it is placed or cancelled.
+  if (picked) return <CatalogDetails key={picked.id} entry={picked} />;
   if (item) return <ObjectInspector key={item.id} item={item} />;
   if (room) return <RoomInspector key={room.id} room={room} />;
   return (
@@ -48,6 +97,13 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
   const base = useRef<Record<string, number> | undefined>(undefined);
   const [name, setName] = useState(item.name);
   const [extrudeDistance, setExtrudeDistance] = useState(0.1);
+  const [lockAspect, setLockAspect] = useState(false);
+  const resize = (axis: "width" | "depth" | "height", value: number) => {
+    if (!lockAspect) return patch({ dimensions: { [axis]: value } });
+    const ratio = value / item.dimensions[axis];
+    const round = (n: number) => Math.round(n * 1000) / 1000;
+    patch({ dimensions: { width: round(item.dimensions.width * ratio), depth: round(item.dimensions.depth * ratio), height: round(item.dimensions.height * ratio) } });
+  };
 
   const begin = () => {
     base.current = { [item.id]: item.version };
@@ -83,33 +139,50 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
         </button>
       </div>
 
-      <div className={"validation-chip validation-chip--" + (issues.some((issue) => issue.severity === "error") ? "error" : issues.length ? "warning" : "ok")}>
-        {issues.length === 0 ? "No spatial issues" : `${issues.length} spatial issue${issues.length > 1 ? "s" : ""}`}
-      </div>
-      {issues.map((issue) => <p key={issue.id} className="issue-inline">{issue.message}</p>)}
-
       <Section title="Transform">
-        <div className="field-grid">
+        <div className="xyz-label">Position <small>m</small></div>
+        <div className="field-grid field-grid--3 xyz">
           <NumberField label="X" value={item.position.x} onBegin={begin} onCommit={(x) => patch({ position: { x } })} disabled={locked} />
+          <NumberField label="Y" value={item.position.y - floorY} min={0} onBegin={begin} onCommit={(y) => patch({ position: { y: Math.round((floorY + y) * 1000) / 1000 } })} disabled={locked} />
           <NumberField label="Z" value={item.position.z} onBegin={begin} onCommit={(z) => patch({ position: { z } })} disabled={locked} />
-          <NumberField label="Elevation" value={item.position.y - floorY} min={0} onBegin={begin} onCommit={(y) => patch({ position: { y: Math.round((floorY + y) * 1000) / 1000 } })} disabled={locked} />
-          <NumberField label="Rotation" suffix="°" step={15} value={item.yawDegrees} onBegin={begin} onCommit={(yawDegrees) => patch({ yawDegrees })} disabled={locked} />
         </div>
-      </Section>
-
-      <Section title="Dimensions">
-        <div className="field-grid field-grid--3">
-          <NumberField label="Width" value={item.dimensions.width} min={0.02} onBegin={begin} onCommit={(width) => patch({ dimensions: { width } })} />
-          <NumberField label="Depth" value={item.dimensions.depth} min={0.02} onBegin={begin} onCommit={(depth) => patch({ dimensions: { depth } })} />
-          <NumberField label="Height" value={item.dimensions.height} min={0.01} onBegin={begin} onCommit={(height) => patch({ dimensions: { height } })} />
+        <div className="xyz-label">Rotation <small>yaw about the vertical axis</small></div>
+        <div className="field-grid field-grid--3 xyz">
+          <NumberField label="Y" suffix="°" step={15} value={item.yawDegrees} onBegin={begin} onCommit={(yawDegrees) => patch({ yawDegrees })} disabled={locked} />
+        </div>
+        <div className="xyz-label">
+          Size <small>m</small>
+          <button type="button" className={"tiny-icon" + (lockAspect ? " tiny-icon--active" : "")} aria-pressed={lockAspect} onClick={() => setLockAspect(!lockAspect)} title={lockAspect ? "Proportions locked" : "Lock proportions"}>{lockAspect ? <Lock size={12} /> : <Unlock size={12} />}</button>
+        </div>
+        <div className="field-grid field-grid--3 xyz">
+          <NumberField label="X" value={item.dimensions.width} min={0.02} onBegin={begin} onCommit={(value) => resize("width", value)} />
+          <NumberField label="Y" value={item.dimensions.height} min={0.01} onBegin={begin} onCommit={(value) => resize("height", value)} />
+          <NumberField label="Z" value={item.dimensions.depth} min={0.02} onBegin={begin} onCommit={(value) => resize("depth", value)} />
         </div>
       </Section>
 
       <Section title="Material">
-        <ColorField label="Color" value={item.color ?? "#9aa39e"} onChange={(color) => patch({ color })} />
+        <select className="material-select" aria-label="Material finish" value={MATERIALS.find((entry) => entry.color.toLowerCase() === (item.color ?? "").toLowerCase())?.color ?? ""} onChange={(event) => event.target.value && patch({ color: event.target.value })}>
+          <option value="">Custom colour</option>
+          {MATERIALS.map((entry) => <option key={entry.color} value={entry.color}>{entry.name}</option>)}
+        </select>
+        <div className="swatch-row">
+          {MATERIALS.map((entry) => (
+            <button key={entry.color} type="button" className={"swatch-dot" + (entry.color.toLowerCase() === (item.color ?? "").toLowerCase() ? " swatch-dot--active" : "")} style={{ background: entry.color }} title={entry.name} aria-label={entry.name} onClick={() => patch({ color: entry.color })} />
+          ))}
+          <label className="swatch-dot swatch-dot--add" title="Custom colour">
+            <Plus size={12} />
+            <input type="color" value={item.color ?? "#9aa39e"} onChange={(event) => patch({ color: event.target.value })} />
+          </label>
+        </div>
       </Section>
 
-      <Section title="Constraints" aside={<span className="section-hint">used by validation & recovery</span>}>
+      <Section title="Spatial validation" collapsible aside={<span className={"validation-chip validation-chip--" + (issues.some((issue) => issue.severity === "error") ? "error" : issues.length ? "warning" : "ok")}>{issues.length === 0 ? "OK" : issues.length}</span>}>
+        {issues.length === 0 ? <p className="field-note">No collisions, boundary, clearance or pathway issues for this object.</p> : null}
+        {issues.map((issue) => <p key={issue.id} className="issue-inline">{issue.message}</p>)}
+      </Section>
+
+      <Section title="Details" collapsible defaultOpen={false} aside={<span className="section-hint">used by validation & recovery</span>}>
         <NumberField
           label="Front clearance"
           value={clearance}
@@ -132,7 +205,7 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
         </button>
       ) : null}
 
-      <Section title="Geometry" aside={item.mesh ? <span className="section-hint">{item.mesh.positions.length / 3} verts · {item.mesh.indices.length / 3} tris</span> : null}>
+      <Section title="Geometry" collapsible defaultOpen={false} aside={item.mesh ? <span className="section-hint">{item.mesh.positions.length / 3} verts · {item.mesh.indices.length / 3} tris</span> : null}>
         {!item.mesh ? (
           <>
             <button type="button" className="primary-button" onClick={() => {
@@ -182,6 +255,12 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
   );
 }
 
+const MATERIALS = [
+  { name: "Oak", color: "#b98a5a" }, { name: "Walnut", color: "#6b4a33" }, { name: "Linen", color: "#e8dfd0" },
+  { name: "Mauve", color: "#a98a9c" }, { name: "Sage", color: "#9aab8e" }, { name: "Navy", color: "#2f3e5c" },
+  { name: "Charcoal", color: "#3a3a3c" }, { name: "White", color: "#f2f0ec" },
+];
+
 function patchMesh(item: FurnitureObject) {
   return useWorkspaceStore.getState().dispatch(
     { type: "furniture.update", furnitureId: item.id, patch: { mesh: createBoxMesh(item.dimensions) } },
@@ -202,7 +281,7 @@ export function duplicate(item: FurnitureObject) {
 function LightSection({ light, onChange }: { light: LightFixture; onChange: (light: LightFixture) => void }) {
   const kelvin: [string, string][] = [["2700K", "#ffc98a"], ["3000K", "#ffd8a8"], ["4000K", "#fff1dc"], ["5000K", "#f4f6ff"]];
   return (
-    <Section title="Light" aside={<span className="section-hint">{light.kind === "spot" ? "spotlight" : "point light"}</span>}>
+    <Section title="Lighting & shadows" collapsible aside={<span className="section-hint">{light.kind === "spot" ? "spotlight" : "point light"}</span>}>
       <Toggle label="On" checked={light.on} onChange={(on) => onChange({ ...light, on })} />
       <NumberField label="Intensity" suffix="cd" step={1} min={0} max={200} value={light.intensity} onCommit={(intensity) => onChange({ ...light, intensity })} />
       <div className="swatch-row">

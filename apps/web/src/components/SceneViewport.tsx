@@ -1,6 +1,6 @@
 import { memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Edges, Grid, Html, Line, OrbitControls, OrthographicCamera, PerspectiveCamera, TransformControls } from "@react-three/drei";
+import { Edges, GizmoHelper, GizmoViewport, Grid, Html, Line, OrbitControls, OrthographicCamera, PerspectiveCamera, TransformControls } from "@react-three/drei";
 import { CanvasTexture, MOUSE, NearestFilter, Plane, Raycaster, Shape, SRGBColorSpace, Vector2, Vector3, type Group, type Object3D } from "three";
 import type { FurnitureObject, FurniturePatch, Room, Scene, ValidationIssue } from "@reality-builder/shared";
 import type { SunStudy } from "@reality-builder/spatial-engine";
@@ -40,7 +40,7 @@ const FurnitureItem = memo(function FurnitureItem({
   const { width, depth, height } = item.dimensions;
   const light = item.light;
   const lightOn = !!light?.on && lightScale > 0;
-  const outline = selected ? "#1f7a5c" : severity === "error" ? "#d9443a" : severity === "warning" ? "#d9921f" : peerColor;
+  const outline = selected ? "#6a3de8" : severity === "error" ? "#d9443a" : severity === "warning" ? "#d9921f" : peerColor;
   return (
     <group
       ref={groupRef}
@@ -178,47 +178,52 @@ function SunOverlay({ study, room }: { study: SunStudy; room: Room }) {
   );
 }
 
+const PRESET_DIRECTIONS: Record<string, [number, number, number]> = {
+  perspective: [0.62, 0.78, 0.92],
+  top: [0, 1, 0.0001],
+  front: [0, 0.0001, 1],
+  side: [1, 0.0001, 0],
+  iso: [1, 0.82, 1],
+};
+
+/** Camera for every preset; ortho presets lock rotation, walkthrough is first-person at eye height. */
 function CameraRig({ scene, selectedId, room }: { scene: Scene; selectedId: string; room: Room | undefined }) {
   const controlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
   const resetSignal = useWorkspaceStore((state) => state.resetCameraSignal);
   const focusSignal = useWorkspaceStore((state) => state.focusSignal);
   const viewMode = useWorkspaceStore((state) => state.viewMode);
+  const panMode = useWorkspaceStore((state) => state.panMode);
   const get = useThree((state) => state.get);
   const span = room ? Math.max(room.dimensions.width, room.dimensions.depth) : 6;
-  const plan = viewMode === "2d";
+  const ortho = viewMode === "top" || viewMode === "front" || viewMode === "side" || viewMode === "iso" || viewMode === "plan";
+  const walk = viewMode === "walk";
 
   const frame = (center: Vector3, radius: number) => {
     const controls = controlsRef.current;
-    // Always the currently active camera (it changes when switching 2D/3D).
+    // Always the currently active camera (it changes when switching presets).
     const { camera, size } = get();
-    if (!controls) return;
-    // Controls may have bound to the previous camera during the 2D/3D swap.
+    if (walk || !controls) return;
     (controls as unknown as { object: typeof camera }).object = camera;
-    if (plan) {
-      // Straight down, north (−Z) at the top; zoom = pixels per metre to fit the area.
-      camera.position.set(center.x, center.y + 40, center.z + 0.0001);
-      const ortho = camera as unknown as { zoom: number; updateProjectionMatrix: () => void };
-      const extent = Math.max(radius * 2.4, 1.5);
-      ortho.zoom = Math.min(size.width, size.height) / extent;
-      ortho.updateProjectionMatrix();
-      controls.target.set(center.x, center.y, center.z);
-      camera.lookAt(center);
-      controls.update();
-      return;
+    const [dx, dy, dz] = PRESET_DIRECTIONS[viewMode === "plan" ? "top" : viewMode] ?? PRESET_DIRECTIONS.perspective!;
+    const direction = new Vector3(dx, dy, dz).normalize();
+    if (ortho) {
+      camera.position.copy(center).addScaledVector(direction, 40);
+      const cam = camera as unknown as { zoom: number; updateProjectionMatrix: () => void };
+      cam.zoom = Math.min(size.width, size.height) / Math.max(radius * 2.6, 1.5);
+      cam.updateProjectionMatrix();
+    } else {
+      camera.position.copy(center).addScaledVector(direction, Math.max(2.2, radius * 2.3));
     }
-    const direction = new Vector3(0.62, 0.78, 0.92).normalize();
-    camera.position.copy(center).addScaledVector(direction, Math.max(2.2, radius * 2.3));
     controls.target.copy(center);
+    camera.lookAt(center);
     controls.update();
   };
 
   useEffect(() => {
     if (!room) return;
-    // Wait one frame so a freshly mounted camera is the active one.
-    const id = requestAnimationFrame(() => frame(new Vector3(room.position.x, room.position.y + (plan ? 0 : 0.6), room.position.z), plan ? Math.max(room.dimensions.width, room.dimensions.depth) / 2 + 0.6 : span * 0.75));
+    const id = requestAnimationFrame(() => frame(new Vector3(room.position.x, room.position.y + (viewMode === "perspective" ? 0.6 : 1), room.position.z), Math.max(room.dimensions.width, room.dimensions.depth) / 2 + 0.5));
     return () => cancelAnimationFrame(id);
-    // Re-frame when the active room or view mode changes, or a reset is requested.
-  }, [resetSignal, room?.id, span, plan]);
+  }, [resetSignal, room?.id, span, viewMode]);
 
   useEffect(() => {
     if (focusSignal === 0) return;
@@ -226,29 +231,109 @@ function CameraRig({ scene, selectedId, room }: { scene: Scene; selectedId: stri
     if (item) frame(new Vector3(item.position.x, item.position.y + item.dimensions.height / 2, item.position.z), Math.max(item.dimensions.width, item.dimensions.depth, item.dimensions.height));
   }, [focusSignal]);
 
+  if (walk) return <><PerspectiveCamera key="walk" makeDefault fov={70} near={0.05} far={200} /><Walkthrough room={room} /></>;
   return (
     <>
-      {plan
-        ? <OrthographicCamera key="plan" makeDefault near={0.1} far={200} position={[0, 40, 0]} zoom={60} />
+      {ortho
+        ? <OrthographicCamera key={"ortho-" + viewMode} makeDefault near={0.1} far={200} position={[0, 40, 0]} zoom={60} />
         : <PerspectiveCamera key="persp" makeDefault fov={40} near={0.05} far={600} position={[7, 6.5, 8]} />}
       <OrbitControls
-        key={plan ? "plan-controls" : "orbit-controls"}
+        key={viewMode + (panMode ? "-pan" : "")}
         ref={controlsRef}
         makeDefault
-        enableRotate={!plan}
+        enableRotate={viewMode === "perspective"}
         screenSpacePanning
-        minPolarAngle={plan ? 0 : 0}
-        maxPolarAngle={plan ? 0 : Math.PI * 0.495}
+        maxPolarAngle={Math.PI * 0.495}
         minDistance={1}
         maxDistance={span * 4 + 20}
         minZoom={8}
         maxZoom={600}
-        mouseButtons={plan ? { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN } : { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
+        mouseButtons={!ortho && !panMode ? { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN } : { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
         enableDamping
         dampingFactor={0.1}
       />
     </>
   );
+}
+
+/** First-person walkthrough: drag to look around, WASD/arrow keys to walk; stays inside the room at eye height. */
+function Walkthrough({ room }: { room: Room | undefined }) {
+  const { camera, gl } = useThree();
+  const keys = useRef(new Set<string>());
+  const look = useRef({ yaw: Math.PI, pitch: 0 });
+  useEffect(() => {
+    if (!room) return;
+    camera.position.set(room.position.x, room.position.y + 1.6, room.position.z + room.dimensions.depth / 2 - 0.6);
+    look.current = { yaw: 0, pitch: -0.05 };
+    let dragging = false;
+    const down = (event: PointerEvent) => {
+      if (event.target === gl.domElement && event.button === 0) dragging = true;
+    };
+    const up = () => (dragging = false);
+    const move = (event: PointerEvent) => {
+      if (!dragging) return;
+      look.current.yaw -= event.movementX * 0.004;
+      look.current.pitch = Math.max(-1.2, Math.min(1.2, look.current.pitch - event.movementY * 0.004));
+    };
+    const key = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      if (event.type === "keydown") keys.current.add(event.key.toLowerCase());
+      else keys.current.delete(event.key.toLowerCase());
+    };
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("keyup", key);
+    };
+  }, [room?.id]);
+  useFrame((_, delta) => {
+    if (!room) return;
+    const { yaw, pitch } = look.current;
+    const forward = new Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new Vector3(-forward.z, 0, forward.x);
+    const step = 1.6 * delta;
+    const k = keys.current;
+    if (k.has("w") || k.has("arrowup")) camera.position.addScaledVector(forward, step);
+    if (k.has("s") || k.has("arrowdown")) camera.position.addScaledVector(forward, -step);
+    if (k.has("d") || k.has("arrowright")) camera.position.addScaledVector(right, step);
+    if (k.has("a") || k.has("arrowleft")) camera.position.addScaledVector(right, -step);
+    const halfW = room.dimensions.width / 2 - 0.25;
+    const halfD = room.dimensions.depth / 2 - 0.25;
+    camera.position.x = Math.max(room.position.x - halfW, Math.min(room.position.x + halfW, camera.position.x));
+    camera.position.z = Math.max(room.position.z - halfD, Math.min(room.position.z + halfD, camera.position.z));
+    camera.position.y = room.position.y + 1.6;
+    camera.rotation.set(pitch, yaw, 0, "YXZ");
+  });
+  return null;
+}
+
+/** Registers a capture function used by Screenshot and project thumbnails. */
+function CaptureBridge() {
+  const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    viewportBridge.capture = (type, maxWidth) => {
+      gl.render(scene, camera);
+      const source = gl.domElement;
+      if (!maxWidth || source.width <= maxWidth) return source.toDataURL(type, 0.85);
+      const canvas = document.createElement("canvas");
+      canvas.width = maxWidth;
+      canvas.height = Math.round((source.height / source.width) * maxWidth);
+      canvas.getContext("2d")!.drawImage(source, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL(type, 0.82);
+    };
+    return () => {
+      viewportBridge.capture = null;
+    };
+  }, [gl, scene, camera]);
+  return null;
 }
 
 function PerfProbe() {
@@ -316,7 +401,10 @@ export function SceneViewport() {
   const visibleRooms = useMemo(() => new Set(scene.rooms.filter((entry) => !room || entry.position.y <= room.position.y + 0.01).map((entry) => entry.id)), [scene.rooms, room]);
   const lowDetail = scene.furniture.length > LOW_DETAIL_THRESHOLD;
   // Plans read best flat: no sun shadows in 2D.
-  const shadows = scene.environment.shadows && !lowDetail && viewMode !== "2d";
+  const showGrid = useWorkspaceStore((state) => state.showGrid);
+  const gridSize = useWorkspaceStore((state) => state.gridSize);
+  const flatView = viewMode === "top" || viewMode === "front" || viewMode === "side";
+  const shadows = scene.environment.shadows && !lowDetail && !flatView;
   const lightScale = scene.environment.artificialLightScale * ARTIFICIAL_LIGHT_FACTOR[scene.environment.mode];
   const selectedItem = scene.furniture.find((item) => item.id === selectedId);
 
@@ -398,16 +486,17 @@ export function SceneViewport() {
         if (event.button === 0 && !editingMesh) selectEntity("");
       }}
     >
-      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} plan={viewMode === "2d"} />
+      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} plan={viewMode !== "perspective" && viewMode !== "walk"} />
       {room ? (
         <>
           <Grid
+            visible={showGrid}
             args={[60, 60]}
             position={[room.position.x, room.position.y - 0.125, room.position.z]}
-            cellSize={0.5}
+            cellSize={gridSize}
             cellThickness={0.5}
             cellColor={scene.environment.mode === "night" ? "#27344a" : "#b8c2bc"}
-            sectionSize={2}
+            sectionSize={gridSize * 4}
             sectionThickness={0.8}
             sectionColor={scene.environment.mode === "night" ? "#33445f" : "#94a39a"}
             fadeDistance={45}
@@ -424,7 +513,7 @@ export function SceneViewport() {
         if (editingMesh && item.id === selectedId) return null;
         if (!visibleRooms.has(item.roomId)) return null;
         // Plan view: hide ceiling-mounted fixtures so they don't cover the floor plan.
-        if (viewMode === "2d" && item.position.y - (scene.rooms.find((entry) => entry.id === item.roomId)?.position.y ?? 0) > 1.9) return null;
+        if (viewMode === "top" && item.position.y - (scene.rooms.find((entry) => entry.id === item.roomId)?.position.y ?? 0) > 1.9) return null;
         const peer = peerSelections.get(item.id);
         return (
           <FurnitureItem
@@ -473,11 +562,17 @@ export function SceneViewport() {
       {selectedItem && editingMesh ? <MeshEditor item={selectedItem} mode={tool} /> : null}
       <CameraRig scene={scene} selectedId={selectedId} room={room} />
       <DragController />
+      <CaptureBridge />
+      {viewMode !== "walk" ? (
+        <GizmoHelper alignment="bottom-left" margin={[64, 64]}>
+          <GizmoViewport axisColors={["#e5483d", "#3fae5a", "#3b82d9"]} labelColor="#fff" />
+        </GizmoHelper>
+      ) : null}
       <PlacementController />
       <PresenceCursors />
       <PlacementGhost />
       <DropBridge />
-      {showPerf ? <PerfProbe /> : null}
+      <PerfProbe />
     </Canvas>
   );
 }

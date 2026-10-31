@@ -6,6 +6,11 @@ export type PerfSample = { fps: number; frameMs: number; drawCalls: number; tria
 export const usePerfStore = create<PerfSample>(() => ({ fps: 0, frameMs: 0, drawCalls: 0, triangles: 0, geometries: 0 }));
 
 /** World-space floor point under a screen position; registered by the viewport for drag-and-drop placement. */
-export const viewportBridge: { screenToFloor: ((clientX: number, clientY: number) => { x: number; z: number } | null) | null } = {
+export const viewportBridge: {
+  screenToFloor: ((clientX: number, clientY: number) => { x: number; z: number } | null) | null;
+  /** Renders the current view and returns it as an image data URL (screenshots, project thumbnails). */
+  capture: ((type: "image/png" | "image/jpeg", maxWidth?: number) => string) | null;
+} = {
   screenToFloor: null,
+  capture: null,
 };

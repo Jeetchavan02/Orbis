@@ -77,7 +77,15 @@ export function NumberField({ label, value, onCommit, onBegin, min, max, step = 
   );
 }
 
-export function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+export function Section({ title, aside, children, collapsible, defaultOpen = true }: { title: string; aside?: ReactNode; children: ReactNode; collapsible?: boolean; defaultOpen?: boolean }) {
+  if (collapsible) {
+    return (
+      <details className="inspector-block inspector-block--collapsible" open={defaultOpen}>
+        <summary className="inspector-block-title"><span>{title}</span>{aside}</summary>
+        {children}
+      </details>
+    );
+  }
   return (
     <section className="inspector-block">
       <header className="inspector-block-title">

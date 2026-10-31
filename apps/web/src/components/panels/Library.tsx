@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import * as Icons from "lucide-react";
-import { FileUp, Loader2, Plus, Search } from "lucide-react";
+import { FileUp, Heart, Loader2, Plus, Search } from "lucide-react";
+import { create } from "zustand";
 import { catalog, GROUPS, ROOM_TYPES, type CatalogItem, type GroupId, type RoomType } from "../../data/catalog";
 import { placeEntry, usePlacement } from "../../lib/placement";
 import { useThumbnail } from "../../lib/thumbnails";
@@ -16,10 +17,35 @@ export function GroupIcon({ group, size = 14 }: { group: GroupId; size?: number 
   return <Icon size={size} color={meta.color} aria-hidden="true" />;
 }
 
+const FAVOURITES_KEY = "rb.favourites";
+function readFavourites(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(FAVOURITES_KEY) ?? "[]") as string[];
+  } catch {
+    return [];
+  }
+}
+/** Per-browser favourite library items. */
+export const useFavourites = create<{ ids: string[]; toggle: (id: string) => void }>((set, get) => ({
+  ids: readFavourites(),
+  toggle: (id) => {
+    const ids = get().ids.includes(id) ? get().ids.filter((entry) => entry !== id) : [...get().ids, id];
+    set({ ids });
+    try {
+      localStorage.setItem(FAVOURITES_KEY, JSON.stringify(ids));
+    } catch {
+      /* storage unavailable: favourites last for this page only */
+    }
+  },
+}));
+
+const QUICK_ROOMS: { id: RoomType | "all"; label: string }[] = [{ id: "all", label: "All" }, { id: "bedroom", label: "Bedroom" }, { id: "living", label: "Living" }, { id: "dining", label: "Dining" }];
+
 const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: boolean }) {
   const [element, setElement] = useState<HTMLButtonElement | null>(null);
   const thumbnail = useThumbnail(entry, element);
   const { start, cancel } = usePlacement.getState();
+  const favourite = useFavourites((state) => state.ids.includes(entry.id));
   return (
     <button
       ref={setElement}
@@ -41,16 +67,25 @@ const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: b
         dragging.id = null;
         cancel();
       }}
-      onClick={() => (armed ? cancel() : start(entry.id, "click"))}
-      onDoubleClick={() => {
+      onClick={() => {
+        // Click adds the exact item at the centre of the room (nearest free spot) and selects it.
         cancel();
         placeEntry(entry.id);
       }}
-      title={`${entry.name}\n${entry.dimensions.width} × ${entry.dimensions.depth} × ${entry.dimensions.height} m\nDrag into the room, or click then click the floor. Double-click to add.`}
+      title={`${entry.name}\n${entry.dimensions.width} × ${entry.dimensions.depth} × ${entry.dimensions.height} m\nClick to add to the centre of the room, or drag it to a spot.`}
     >
       <span className="lib-thumb">
         {thumbnail ? <img src={thumbnail} alt="" draggable={false} /> : <GroupIcon group={entry.group} size={22} />}
       </span>
+      <span
+        role="button"
+        tabIndex={0}
+        className={"lib-fav" + (favourite ? " lib-fav--on" : "")}
+        aria-label={favourite ? "Remove from favourites" : "Add to favourites"}
+        aria-pressed={favourite}
+        onClick={(event) => { event.stopPropagation(); useFavourites.getState().toggle(entry.id); }}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); useFavourites.getState().toggle(entry.id); } }}
+      ><Heart size={13} fill={favourite ? "currentColor" : "none"} /></span>
       <span className="lib-name">{entry.name}</span>
       <span className="lib-dims">{entry.dimensions.width} × {entry.dimensions.depth} m</span>
     </button>
@@ -59,45 +94,52 @@ const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: b
 
 const PAGE = 60;
 
-export function Library({ onImport, importing }: { onImport: () => void; importing: boolean }) {
+export function Library({ onImport, importing, initialGroup = "all" }: { onImport: () => void; importing: boolean; initialGroup?: GroupId | "all" | "favourites" }) {
   const [room, setRoom] = useState<RoomType | "all">(() => {
     const scene = useWorkspaceStore.getState().scene;
     return (scene.roomType as RoomType | undefined) ?? "all";
   });
-  const [group, setGroup] = useState<GroupId | "all">("all");
+  const [group, setGroup] = useState<GroupId | "all" | "favourites">(initialGroup);
+  const favourites = useFavourites((state) => state.ids);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const armedId = usePlacement((state) => (state.mode === "click" ? state.entryId : null));
   const needle = query.trim().toLowerCase();
 
   // Search always spans the full catalogue; room and group narrow the browsing view.
-  const inRoom = useMemo(() => (needle ? catalog : catalog.filter((entry) => room === "all" || entry.rooms.includes(room))), [room, needle]);
+  const inRoom = useMemo(() => (needle || initialGroup === "openings" || initialGroup === "lighting" ? catalog : catalog.filter((entry) => room === "all" || entry.rooms.includes(room))), [room, needle, initialGroup]);
   const groups = useMemo(() => {
     const counts = new Map<GroupId, number>();
     for (const entry of inRoom) counts.set(entry.group, (counts.get(entry.group) ?? 0) + 1);
     return [...counts].sort((a, b) => b[1] - a[1]);
   }, [inRoom]);
   const visible = useMemo(() => inRoom.filter((entry) =>
-    (group === "all" || entry.group === group) &&
-    (!needle || entry.name.toLowerCase().includes(needle) || GROUPS[entry.group].label.toLowerCase().includes(needle))), [inRoom, group, needle]);
+    (group === "all" || entry.group === group || (group === "favourites" && favourites.includes(entry.id))) &&
+    (!needle || entry.name.toLowerCase().includes(needle) || GROUPS[entry.group].label.toLowerCase().includes(needle))), [inRoom, group, needle, favourites]);
 
   return (
     <div className="library">
       <div className="lib-controls">
-        <select aria-label="Room type" value={room} onChange={(event) => { setRoom(event.target.value as RoomType | "all"); setGroup("all"); setLimit(PAGE); }}>
-          <option value="all">All objects ({catalog.length})</option>
-          {ROOM_TYPES.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-        </select>
         <label className="search-field search-field--tight">
           <Search size={14} />
           <input aria-label="Search library" placeholder={`Search ${catalog.length} items`} value={query} onChange={(event) => { setQuery(event.target.value); setLimit(PAGE); }} />
         </label>
       </div>
-      <div className="lib-groups" role="tablist" aria-label="Categories">
-        <button type="button" role="tab" aria-selected={group === "all"} className={group === "all" ? "active" : ""} onClick={() => setGroup("all")} title="All categories">All</button>
+      <div className="lib-pills" role="radiogroup" aria-label="Room type">
+        {QUICK_ROOMS.map((entry) => (
+          <button key={entry.id} type="button" role="radio" aria-checked={room === entry.id} className={room === entry.id ? "active" : ""} onClick={() => { setRoom(entry.id); setGroup("all"); setLimit(PAGE); }}>{entry.label}</button>
+        ))}
+        <select aria-label="More room types" className={QUICK_ROOMS.some((entry) => entry.id === room) ? "" : "active"} value={QUICK_ROOMS.some((entry) => entry.id === room) ? "" : room} onChange={(event) => { if (event.target.value) { setRoom(event.target.value as RoomType); setGroup("all"); setLimit(PAGE); } }}>
+          <option value="">More…</option>
+          {ROOM_TYPES.filter((entry) => !QUICK_ROOMS.some((quick) => quick.id === entry.id)).map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+        </select>
+      </div>
+      <div className="lib-categories" role="tablist" aria-label="Categories">
+        <button type="button" role="tab" aria-selected={group === "all"} className={group === "all" ? "active" : ""} onClick={() => setGroup("all")}><span>All items</span><small>{inRoom.length}</small></button>
+        <button type="button" role="tab" aria-selected={group === "favourites"} className={group === "favourites" ? "active" : ""} onClick={() => setGroup("favourites")}><Heart size={13} color="#e5483d" /> <span>Favourites</span><small>{favourites.length}</small></button>
         {groups.map(([id, count]) => (
-          <button key={id} type="button" role="tab" aria-selected={group === id} className={group === id ? "active" : ""} onClick={() => { setGroup(id); setLimit(PAGE); }} title={`${GROUPS[id].label} (${count})`}>
-            <GroupIcon group={id} /> <span>{GROUPS[id].label}</span>
+          <button key={id} type="button" role="tab" aria-selected={group === id} className={group === id ? "active" : ""} onClick={() => { setGroup(id); setLimit(PAGE); }}>
+            <GroupIcon group={id} /> <span>{GROUPS[id].label}</span><small>{count}</small>
           </button>
         ))}
       </div>
@@ -109,7 +151,7 @@ export function Library({ onImport, importing }: { onImport: () => void; importi
         <div className="lib-grid">
           {visible.slice(0, limit).map((entry) => <Card key={entry.id} entry={entry} armed={armedId === entry.id} />)}
         </div>
-        {visible.length === 0 ? <p className="field-note pad">Nothing matches “{query}”.</p> : null}
+        {visible.length === 0 ? <p className="field-note pad">{group === "favourites" && !needle ? "No favourites yet — tap the heart on any item." : `Nothing matches “${query}”.`}</p> : null}
         {limit < visible.length ? <button type="button" className="ghost-button lib-more" onClick={() => setLimit(limit + PAGE)}><Plus size={13} /> Show more ({visible.length - limit})</button> : null}
         <button type="button" className="import-card" onClick={onImport} disabled={importing}>
           {importing ? <Loader2 size={16} className="spin" /> : <FileUp size={16} />}

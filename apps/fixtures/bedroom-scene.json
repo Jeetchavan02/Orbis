@@ -19,8 +19,6 @@
         "wallThickness": 0.14
       },
       "yawDegrees": 0,
-      "floorColor": "#c8ab86",
-      "wallColor": "#f1eee8",
       "openings": [
         {
           "id": "door-main",
@@ -29,16 +27,20 @@
           "offset": 1.5,
           "width": 0.8,
           "height": 2.05,
-          "sillHeight": 0
+          "sillHeight": 0,
+          "hinge": "left",
+          "swing": "in"
         },
         {
           "id": "window-north",
           "kind": "window",
           "wall": "north",
           "offset": -1.6,
-          "width": 1.0,
+          "width": 1,
           "height": 1.3,
-          "sillHeight": 0.9
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
         },
         {
           "id": "window-east",
@@ -47,9 +49,14 @@
           "offset": -0.9,
           "width": 1.2,
           "height": 1.3,
-          "sillHeight": 0.9
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
         }
-      ]
+      ],
+      "floorColor": "#b88a5e",
+      "wallColor": "#ece2da",
+      "version": 1
     }
   ],
   "furniture": [
@@ -66,14 +73,15 @@
       },
       "yawDegrees": 0,
       "dimensions": {
-        "width": 2.0,
+        "width": 2,
         "depth": 1.4,
         "height": 0.015
       },
-      "color": "#d9d1c3",
+      "color": "#e3d6c6",
       "constraints": {
         "floorCovering": true
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-bed",
@@ -90,9 +98,10 @@
       "dimensions": {
         "width": 1.6,
         "depth": 2.1,
-        "height": 1.0
+        "height": 1
       },
-      "color": "#d4d9df"
+      "color": "#cdb8c4",
+      "version": 1
     },
     {
       "id": "obj-nightstand-left",
@@ -114,7 +123,8 @@
       "color": "#9b7a5f",
       "constraints": {
         "frontClearance": 0.4
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-nightstand-right",
@@ -136,7 +146,8 @@
       "color": "#9b7a5f",
       "constraints": {
         "frontClearance": 0.4
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-wardrobe",
@@ -145,7 +156,7 @@
       "category": "storage",
       "catalogItemId": "wardrobe",
       "position": {
-        "x": -2.0,
+        "x": -2,
         "y": 0,
         "z": 0.7
       },
@@ -155,7 +166,8 @@
         "depth": 0.6,
         "height": 2.1
       },
-      "color": "#b9c1b9"
+      "color": "#e8e0d6",
+      "version": 1
     },
     {
       "id": "obj-dresser",
@@ -170,11 +182,12 @@
       },
       "yawDegrees": 270,
       "dimensions": {
-        "width": 1.0,
+        "width": 1,
         "depth": 0.45,
         "height": 0.8
       },
-      "color": "#9b7a5f"
+      "color": "#9b7a5f",
+      "version": 1
     },
     {
       "id": "obj-desk",
@@ -193,7 +206,8 @@
         "depth": 0.6,
         "height": 0.75
       },
-      "color": "#a07c60"
+      "color": "#a07c60",
+      "version": 1
     },
     {
       "id": "obj-desk-chair",
@@ -212,10 +226,11 @@
         "depth": 0.5,
         "height": 0.9
       },
-      "color": "#5f6f68",
+      "color": "#a98a9c",
       "constraints": {
         "frontClearance": 0
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-desk-lamp",
@@ -241,7 +256,8 @@
         "intensity": 6,
         "color": "#ffd9a8",
         "height": 0.4
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-floor-lamp",
@@ -267,7 +283,8 @@
         "intensity": 8,
         "color": "#ffcf91",
         "height": 1.5
-      }
+      },
+      "version": 1
     },
     {
       "id": "obj-plant",
@@ -276,7 +293,7 @@
       "category": "decor",
       "catalogItemId": "plant",
       "position": {
-        "x": 2.0,
+        "x": 2,
         "y": 0,
         "z": -1.8
       },
@@ -286,38 +303,135 @@
         "depth": 0.45,
         "height": 1.2
       },
-      "color": "#6f9a74"
+      "color": "#6f9a74",
+      "version": 1
     },
     {
-      "id": "obj-ceiling-light",
+      "id": "warm-curtains-n",
       "roomId": "room-bedroom",
-      "name": "Ceiling light",
-      "category": "lighting",
-      "catalogItemId": "ceiling-light",
+      "name": "Curtains",
+      "category": "decor",
+      "catalogItemId": "curtains-curtains-1-4-m-mauve",
       "position": {
-        "x": 0,
-        "y": 2.6,
-        "z": 0
+        "x": -1.6,
+        "y": 0,
+        "z": -2.04
       },
       "yawDegrees": 0,
       "dimensions": {
-        "width": 0.5,
-        "depth": 0.5,
-        "height": 0.1
+        "width": 1.4,
+        "depth": 0.12,
+        "height": 2.45
       },
-      "color": "#f4f1ea",
+      "color": "#b493a4",
+      "constraints": {
+        "frontClearance": 0,
+        "floorCovering": true
+      },
+      "version": 1
+    },
+    {
+      "id": "warm-curtains-e",
+      "roomId": "room-bedroom",
+      "name": "Curtains",
+      "category": "decor",
+      "catalogItemId": "curtains-curtains-2-0-m-linen",
+      "position": {
+        "x": 2.2399999999999998,
+        "y": 0,
+        "z": -0.9
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 2,
+        "depth": 0.12,
+        "height": 2.45
+      },
+      "color": "#e6dccb",
+      "constraints": {
+        "frontClearance": 0,
+        "floorCovering": true
+      },
+      "version": 1
+    },
+    {
+      "id": "warm-art",
+      "roomId": "room-bedroom",
+      "name": "Wall art",
+      "category": "decor",
+      "catalogItemId": "artwork-abstract-canvas-large",
+      "position": {
+        "x": 0,
+        "y": 1.35,
+        "z": -2.08
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.04,
+        "height": 0.8
+      },
+      "color": "#d98c5f",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "warm-pendant",
+      "roomId": "room-bedroom",
+      "name": "Pendant",
+      "category": "lighting",
+      "catalogItemId": "pendant-dome-pendant-brass",
+      "position": {
+        "x": 0,
+        "y": 1.85,
+        "z": 0.3
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.8
+      },
+      "color": "#b08d57",
+      "constraints": {
+        "frontClearance": 0
+      },
       "light": {
         "kind": "point",
         "on": true,
         "intensity": 14,
-        "color": "#fff1dc",
-        "height": 0
-      }
+        "color": "#ffd2a0",
+        "height": 0.1
+      },
+      "version": 1
     }
   ],
+  "rules": {
+    "collisions": true,
+    "boundaries": true,
+    "clearances": true,
+    "pathways": true,
+    "vastu": false,
+    "minPassageWidth": 0.6,
+    "categoryClearance": {
+      "beds": 0.6,
+      "storage": 0.7,
+      "seating": 0.45,
+      "tables": 0,
+      "lighting": 0,
+      "decor": 0,
+      "other": 0
+    }
+  },
   "environment": {
     "mode": "day",
     "artificialLightScale": 1,
-    "shadows": true
-  }
+    "shadows": true,
+    "latitude": 19.076,
+    "longitude": 72.877,
+    "northOffsetDegrees": 0
+  },
+  "settingsVersion": 1
 }

@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useState } from "react";
-import { advance, createRoot, useThree, type ReconcilerRoot } from "@react-three/fiber";
+import { advance, createRoot, extend, useThree, type ReconcilerRoot } from "@react-three/fiber";
+import * as THREE from "three";
 import { ACESFilmicToneMapping, SRGBColorSpace } from "three";
+
+// <Canvas> registers the THREE catalogue on mount; pages without one (the homepage) must do it here.
+extend(THREE as unknown as Parameters<typeof extend>[0]);
 import type { FurnitureObject } from "@reality-builder/shared";
 import type { CatalogItem } from "../data/catalog";
 import { FurnitureModel } from "../components/viewport/FurnitureModel";

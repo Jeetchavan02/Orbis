@@ -1,0 +1,395 @@
+{
+  "schemaVersion": 1,
+  "id": "template-living",
+  "name": "Minimal living room",
+  "coordinateSystem": "y-up-xz-meters",
+  "rooms": [
+    {
+      "id": "living-room",
+      "name": "Minimal living room",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "dimensions": {
+        "width": 5.2,
+        "depth": 4.4,
+        "height": 2.7,
+        "wallThickness": 0.14
+      },
+      "yawDegrees": 0,
+      "openings": [
+        {
+          "id": "living-opening-0",
+          "kind": "door",
+          "wall": "south",
+          "offset": 1.8,
+          "width": 0.9,
+          "height": 2.05,
+          "sillHeight": 0,
+          "hinge": "right",
+          "swing": "in"
+        },
+        {
+          "id": "living-opening-1",
+          "kind": "window",
+          "wall": "north",
+          "offset": 0.3,
+          "width": 1.8,
+          "height": 1.3,
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
+        },
+        {
+          "id": "living-opening-2",
+          "kind": "window",
+          "wall": "west",
+          "offset": -1.4,
+          "width": 1,
+          "height": 1.3,
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
+        }
+      ],
+      "floorColor": "#c9a77f",
+      "wallColor": "#efe9e2",
+      "version": 1
+    }
+  ],
+  "furniture": [
+    {
+      "id": "living-1",
+      "roomId": "living-room",
+      "name": "Border rug 2.0 × 3.0 m",
+      "category": "decor",
+      "catalogItemId": "rug-border-rug-2-0-3-0-m-ivory",
+      "position": {
+        "x": -0.4,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 2,
+        "depth": 3,
+        "height": 0.015
+      },
+      "color": "#e3dccd",
+      "constraints": {
+        "floorCovering": true
+      },
+      "version": 1
+    },
+    {
+      "id": "living-2",
+      "roomId": "living-room",
+      "name": "Sofa",
+      "category": "seating",
+      "catalogItemId": "sofa-modern-three-seater-oatmeal",
+      "position": {
+        "x": -2.14,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 2.2,
+        "depth": 0.92,
+        "height": 0.84
+      },
+      "color": "#cdbfa8",
+      "version": 1
+    },
+    {
+      "id": "living-3",
+      "roomId": "living-room",
+      "name": "Coffee table",
+      "category": "tables",
+      "catalogItemId": "coffee-table-rectangular-coffee-table-oak",
+      "position": {
+        "x": -0.85,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 1.1,
+        "depth": 0.6,
+        "height": 0.42
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "living-4",
+      "roomId": "living-room",
+      "name": "TV unit",
+      "category": "storage",
+      "catalogItemId": "tv-unit-low-tv-unit-walnut",
+      "position": {
+        "x": 2.39,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 1.8,
+        "depth": 0.42,
+        "height": 0.5
+      },
+      "color": "#6e4a33",
+      "constraints": {
+        "frontClearance": 0.4
+      },
+      "version": 1
+    },
+    {
+      "id": "living-5",
+      "roomId": "living-room",
+      "name": "55\" TV",
+      "category": "other",
+      "catalogItemId": "tv-55-tv",
+      "position": {
+        "x": 2.45,
+        "y": 0.5,
+        "z": 0
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 1.23,
+        "depth": 0.22,
+        "height": 0.818
+      },
+      "color": "#1d1f22",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "living-6",
+      "roomId": "living-room",
+      "name": "Armchair",
+      "category": "seating",
+      "catalogItemId": "armchair-club-armchair-sage",
+      "position": {
+        "x": 0.6,
+        "y": 0,
+        "z": -1.775
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.9,
+        "depth": 0.85,
+        "height": 0.8
+      },
+      "color": "#8fa38b",
+      "version": 1
+    },
+    {
+      "id": "living-7",
+      "roomId": "living-room",
+      "name": "Armchair",
+      "category": "seating",
+      "catalogItemId": "armchair-club-armchair-sage",
+      "position": {
+        "x": 0.6,
+        "y": 0,
+        "z": 1.775
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 0.9,
+        "depth": 0.85,
+        "height": 0.8
+      },
+      "color": "#8fa38b",
+      "version": 1
+    },
+    {
+      "id": "living-8",
+      "roomId": "living-room",
+      "name": "Floor lamp",
+      "category": "lighting",
+      "catalogItemId": "floor-lamp-drum-floor-lamp-linen",
+      "position": {
+        "x": -2.35,
+        "y": 0,
+        "z": -1.85
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 1.6
+      },
+      "color": "#e9dfc9",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 9,
+        "color": "#ffd2a0",
+        "height": 1.45
+      },
+      "version": 1
+    },
+    {
+      "id": "living-9",
+      "roomId": "living-room",
+      "name": "Side table",
+      "category": "tables",
+      "catalogItemId": "side-table-round-side-table-oak",
+      "position": {
+        "x": -2.3,
+        "y": 0,
+        "z": 1.5
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.45,
+        "depth": 0.45,
+        "height": 0.55
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "living-10",
+      "roomId": "living-room",
+      "name": "Fiddle-leaf fig",
+      "category": "decor",
+      "catalogItemId": "plant-large-fiddle-leaf-fig-in-ceramic-pot",
+      "position": {
+        "x": 2.28,
+        "y": 0,
+        "z": -1.8
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.63,
+        "depth": 0.63,
+        "height": 1.4
+      },
+      "color": "#5f8f5a",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "living-11",
+      "roomId": "living-room",
+      "name": "Bookcase",
+      "category": "storage",
+      "catalogItemId": "bookshelf-tall-bookcase-oak",
+      "position": {
+        "x": -1,
+        "y": 0,
+        "z": -2.05
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.8,
+        "depth": 0.3,
+        "height": 1.9
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0.5
+      },
+      "version": 1
+    },
+    {
+      "id": "living-12",
+      "roomId": "living-room",
+      "name": "Wall art",
+      "category": "decor",
+      "catalogItemId": "artwork-abstract-canvas-large",
+      "position": {
+        "x": -2.58,
+        "y": 1.3,
+        "z": 0
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.04,
+        "height": 0.8
+      },
+      "color": "#d98c5f",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "living-13",
+      "roomId": "living-room",
+      "name": "Ceiling light",
+      "category": "lighting",
+      "catalogItemId": "ceiling-light-flush-ceiling-light-white",
+      "position": {
+        "x": 0,
+        "y": 2.5,
+        "z": 0
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.45,
+        "depth": 0.45,
+        "height": 0.1
+      },
+      "color": "#f4f1ea",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 16,
+        "color": "#ffd2a0",
+        "height": 0
+      },
+      "version": 1
+    }
+  ],
+  "rules": {
+    "collisions": true,
+    "boundaries": true,
+    "clearances": true,
+    "pathways": true,
+    "vastu": false,
+    "minPassageWidth": 0.6,
+    "categoryClearance": {
+      "beds": 0.6,
+      "storage": 0.7,
+      "seating": 0.45,
+      "tables": 0,
+      "lighting": 0,
+      "decor": 0,
+      "other": 0
+    }
+  },
+  "environment": {
+    "mode": "day",
+    "artificialLightScale": 1,
+    "shadows": true,
+    "latitude": 19.076,
+    "longitude": 72.877,
+    "northOffsetDegrees": 0
+  },
+  "roomType": "living",
+  "settingsVersion": 1
+}

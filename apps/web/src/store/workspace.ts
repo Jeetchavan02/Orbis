@@ -1,3 +1,4 @@
+import { viewportBridge } from "../lib/perf";
 import { create } from "zustand";
 import {
   applySceneAction,
@@ -18,6 +19,8 @@ import type { GuidelineReport, LayoutScore, OptimizationResult, RecoveryCandidat
 import { starterScene } from "../data/scene";
 import { CollabClient, saveProfile, sessionIdentity, type ConnectionState } from "../lib/collab";
 import type { WorkerRequest, WorkerResponse } from "../workers/spatial.worker";
+
+export type ViewMode = "perspective" | "top" | "front" | "side" | "iso" | "walk" | "plan";
 
 export type TransformTool = "select" | "translate" | "rotate" | "scale" | "vertex" | "face";
 
@@ -47,8 +50,15 @@ type WorkspaceStore = {
   /** Floor/room being edited; placement, camera and insights follow it. */
   activeRoomId: string;
   tool: TransformTool;
-  /** "2d" = top-down orthographic floor plan, "3d" = perspective orbit view. */
-  viewMode: "plan" | "2d" | "3d";
+  /** Camera preset: perspective orbit, orthographic top/front/side/isometric, first-person walkthrough, or the SVG floor plan. */
+  viewMode: ViewMode;
+  /** Left-drag pans instead of orbiting. */
+  panMode: boolean;
+  showGrid: boolean;
+  /** Grid cell size in metres; also the snap step for dragging. */
+  gridSize: number;
+  /** Recent notices (newest first) for the notifications bell. */
+  activityLog: { id: number; tone: Notice["tone"]; text: string; at: number }[];
   resetCameraSignal: number;
   focusSignal: number;
 
@@ -83,7 +93,9 @@ type WorkspaceStore = {
   selectEntity: (entityId: string) => void;
   setActiveRoom: (roomId: string) => void;
   setTool: (tool: TransformTool) => void;
-  setViewMode: (viewMode: "plan" | "2d" | "3d") => void;
+  setViewMode: (viewMode: ViewMode) => void;
+  setPanMode: (panMode: boolean) => void;
+  setGrid: (patch: { showGrid?: boolean; gridSize?: number }) => void;
   /** Change this collaborator's display name/colour (broadcast to everyone). */
   rename: (name: string, color: string) => void;
   /** Share this user's pointer position (throttled); null hides the cursor. */
@@ -153,6 +165,13 @@ function storeOfflineWork(scene: Scene, edits: number) {
 const restoredOfflineWork = loadOfflineWork();
 const sceneId = new URLSearchParams(location.search).get("scene") ?? "default";
 
+/** Uploads a small viewport capture as the project card thumbnail (best effort). */
+export function uploadThumbnail() {
+  const image = viewportBridge.capture?.("image/jpeg", 480);
+  if (!image) return;
+  void fetch(`/api/projects/${encodeURIComponent(sceneId)}/thumbnail`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl: image }) }).catch(() => undefined);
+}
+
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
   const pending = new Map<string, Pending>();
   /** Last server sequence number applied; a gap means a missed message → resynchronize. */
@@ -162,7 +181,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
 
   const notify = (tone: Notice["tone"], text: string) => {
     const id = ++noticeCounter;
-    set((state) => ({ notices: [...state.notices.slice(-3), { id, tone, text }] }));
+    set((state) => ({ notices: [...state.notices.slice(-3), { id, tone, text }], activityLog: [{ id, tone, text, at: Date.now() }, ...state.activityLog].slice(0, 40) }));
     window.setTimeout(() => get().dismissNotice(id), tone === "error" ? 7000 : 4000);
   };
 
@@ -379,7 +398,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     selectedEntityId: "",
     activeRoomId: (restoredOfflineWork?.scene ?? starterScene).rooms[0]?.id ?? "",
     tool: "select",
-    viewMode: "3d",
+    viewMode: "perspective",
+    panMode: false,
+    showGrid: true,
+    gridSize: 0.25,
+    activityLog: [],
     resetCameraSignal: 0,
     focusSignal: 0,
     connection: "connecting",
@@ -447,6 +470,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     save: () => {
       if (get().connection === "online" && client.send({ type: "save" })) {
         set((state) => ({ saveStatus: { ...state.saveStatus, state: "saving" } }));
+        uploadThumbnail();
       } else {
         downloadScene(get().scene);
         notify("info", "Server unavailable — scene downloaded as a JSON file instead.");
@@ -522,6 +546,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
       }, 80);
     },
     setViewMode: (viewMode) => set((state) => ({ viewMode, resetCameraSignal: state.resetCameraSignal + 1, tool: state.tool === "vertex" || state.tool === "face" ? "select" : state.tool })),
+    setPanMode: (panMode) => set({ panMode }),
+    setGrid: (patch) => set((state) => ({ showGrid: patch.showGrid ?? state.showGrid, gridSize: patch.gridSize ?? state.gridSize })),
     setMeshSelection: (selection) => set((state) => ({ mesh: { ...state.mesh, ...selection } })),
     requestCameraReset: () => set((state) => ({ resetCameraSignal: state.resetCameraSignal + 1 })),
     requestFocus: () => set((state) => ({ focusSignal: state.focusSignal + 1 })),

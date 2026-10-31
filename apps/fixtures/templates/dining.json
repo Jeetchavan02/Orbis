@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "id": "template-dining",
+  "name": "Contemporary dining room",
+  "coordinateSystem": "y-up-xz-meters",
+  "rooms": [
+    {
+      "id": "dining-room",
+      "name": "Contemporary dining room",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "dimensions": {
+        "width": 4.8,
+        "depth": 4,
+        "height": 2.7,
+        "wallThickness": 0.14
+      },
+      "yawDegrees": 0,
+      "openings": [
+        {
+          "id": "dining-opening-0",
+          "kind": "door",
+          "wall": "south",
+          "offset": -1.6,
+          "width": 0.9,
+          "height": 2.05,
+          "sillHeight": 0,
+          "hinge": "left",
+          "swing": "in"
+        },
+        {
+          "id": "dining-opening-1",
+          "kind": "window",
+          "wall": "north",
+          "offset": 0.9,
+          "width": 1.6,
+          "height": 1.3,
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
+        }
+      ],
+      "floorColor": "#b8946c",
+      "wallColor": "#ece6dc",
+      "version": 1
+    }
+  ],
+  "furniture": [
+    {
+      "id": "dining-1",
+      "roomId": "dining-room",
+      "name": "Rug",
+      "category": "decor",
+      "catalogItemId": "rug-border-rug-2-0-3-0-m-slate",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 2,
+        "depth": 3,
+        "height": 0.015
+      },
+      "color": "#6f7780",
+      "constraints": {
+        "floorCovering": true
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-2",
+      "roomId": "dining-room",
+      "name": "Dining table",
+      "category": "tables",
+      "catalogItemId": "table-tapered-leg-dining-table-6-seat-walnut",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 1.8,
+        "depth": 0.9,
+        "height": 0.75
+      },
+      "color": "#6e4a33",
+      "version": 1
+    },
+    {
+      "id": "dining-3",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": -0.6,
+        "y": 0,
+        "z": -0.75
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-4",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": -0.6,
+        "y": 0,
+        "z": 0.75
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-5",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -0.75
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-6",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0.75
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-7",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": 0.6,
+        "y": 0,
+        "z": -0.75
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-8",
+      "roomId": "dining-room",
+      "name": "Dining chair",
+      "category": "seating",
+      "catalogItemId": "chair-upholstered-dining-chair-oak",
+      "position": {
+        "x": 0.6,
+        "y": 0,
+        "z": 0.75
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 0.46,
+        "depth": 0.52,
+        "height": 0.88
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-9",
+      "roomId": "dining-room",
+      "name": "Sideboard",
+      "category": "storage",
+      "catalogItemId": "dresser-modern-dresser-walnut",
+      "position": {
+        "x": 2.16,
+        "y": 0,
+        "z": 0
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.48,
+        "height": 0.85
+      },
+      "color": "#6e4a33",
+      "version": 1
+    },
+    {
+      "id": "dining-10",
+      "roomId": "dining-room",
+      "name": "Pendant",
+      "category": "lighting",
+      "catalogItemId": "pendant-dome-pendant-brass",
+      "position": {
+        "x": 0,
+        "y": 1.85,
+        "z": 0
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.8
+      },
+      "color": "#b08d57",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 14,
+        "color": "#ffd2a0",
+        "height": 0.1
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-11",
+      "roomId": "dining-room",
+      "name": "Plant",
+      "category": "decor",
+      "catalogItemId": "plant-medium-leafy-bush-in-terracotta-pot",
+      "position": {
+        "x": -2.05,
+        "y": 0,
+        "z": -1.65
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.36000000000000004,
+        "depth": 0.36000000000000004,
+        "height": 0.8
+      },
+      "color": "#5f8f5a",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "dining-12",
+      "roomId": "dining-room",
+      "name": "Wall art",
+      "category": "decor",
+      "catalogItemId": "artwork-landscape-print-large",
+      "position": {
+        "x": -0.6,
+        "y": 1.3,
+        "z": -1.98
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.04,
+        "height": 0.8
+      },
+      "color": "#7fa3c2",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    }
+  ],
+  "rules": {
+    "collisions": true,
+    "boundaries": true,
+    "clearances": true,
+    "pathways": true,
+    "vastu": false,
+    "minPassageWidth": 0.6,
+    "categoryClearance": {
+      "beds": 0.6,
+      "storage": 0.7,
+      "seating": 0.45,
+      "tables": 0,
+      "lighting": 0,
+      "decor": 0,
+      "other": 0
+    }
+  },
+  "environment": {
+    "mode": "day",
+    "artificialLightScale": 1,
+    "shadows": true,
+    "latitude": 19.076,
+    "longitude": 72.877,
+    "northOffsetDegrees": 0
+  },
+  "roomType": "dining",
+  "settingsVersion": 1
+}

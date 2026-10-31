@@ -219,7 +219,7 @@ export function SelectionHandles({ item, group }: { item: FurnitureObject; group
   const radius = Math.hypot(item.dimensions.width, item.dimensions.depth) / 2 + 0.18;
   const locked = !!item.constraints?.locked;
   const dragging = drag.state?.item.id === item.id;
-  const color = dragging && feedback.colliding ? "#e5483d" : "#1f7a5c";
+  const color = dragging && feedback.colliding ? "#e5483d" : "#6a3de8";
 
   useEffect(() => {
     const material = ringRef.current?.material as MeshBasicMaterial | undefined;

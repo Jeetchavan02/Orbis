@@ -1,3 +1,4 @@
+import net from "node:net";
 import { spawn } from "node:child_process";
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -36,7 +37,23 @@ function stopChildren(signal = "SIGTERM", exitCode = 0) {
 process.on("SIGINT", () => stopChildren("SIGINT"));
 process.on("SIGTERM", () => stopChildren("SIGTERM"));
 
+/** True when something already listens on the port (usually another Reality Builder dev server). */
+function portInUse(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("error", () => resolve(false));
+  });
+}
+
 try {
+  const busy = [];
+  for (const port of [Number(process.env.API_PORT ?? 3001), 5173]) if (await portInUse(port)) busy.push(port);
+  if (busy.length) {
+    console.error(`\nReality Builder seems to be running already (port ${busy.join(" and ")} in use).`);
+    console.error("Stop the other dev server with Ctrl+C in its terminal, or run:  lsof -ti tcp:3001,5173 | xargs kill\n");
+    process.exit(1);
+  }
   console.log("Preparing shared workspace packages…");
   await runNpm(["run", "build:packages"]);
 

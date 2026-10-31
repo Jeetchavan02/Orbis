@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Redo2,
   Undo2,
@@ -31,19 +31,12 @@ import { placeEntry, usePlacement } from "./lib/placement";
 import { ConflictDialog, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { RulesPanel } from "./components/panels/RulesPanel";
 import { TopBar } from "./components/panels/TopBar";
+import { TOOLS, ViewportChrome } from "./components/viewport/ViewportChrome";
+import { usePerfStore } from "./lib/perf";
 import { useContextMenu } from "./lib/ui";
-import { useWorkspaceStore, type TransformTool } from "./store/workspace";
+import { useWorkspaceStore } from "./store/workspace";
 
 type RightTab = "properties" | "issues" | "rules" | "insights" | "ai";
-
-const TOOLS: { id: TransformTool; label: string; key: string; icon: typeof Move3D; mesh?: boolean }[] = [
-  { id: "select", label: "Drag", key: "Q", icon: MousePointer2 },
-  { id: "translate", label: "Axis move", key: "W", icon: Move3D },
-  { id: "rotate", label: "Axis rotate", key: "E", icon: Rotate3D },
-  { id: "scale", label: "Resize", key: "R", icon: Maximize2 },
-  { id: "vertex", label: "Vertex", key: "V", icon: Waypoints, mesh: true },
-  { id: "face", label: "Face", key: "G", icon: RectangleHorizontal, mesh: true },
-];
 
 function deleteSelected() {
   const { scene, selectedEntityId, dispatch, selectEntity } = useWorkspaceStore.getState();
@@ -59,6 +52,9 @@ function rotateSelected(degrees: number) {
 
 export default function App() {
   const [rightTab, setRightTab] = useState<RightTab>("properties");
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const fps = usePerfStore((state) => state.fps);
+  const activeRoomId = useWorkspaceStore((state) => state.activeRoomId);
   const scene = useWorkspaceStore((state) => state.scene);
   const tool = useWorkspaceStore((state) => state.tool);
   const selectedId = useWorkspaceStore((state) => state.selectedEntityId);
@@ -68,6 +64,11 @@ export default function App() {
   const connection = useWorkspaceStore((state) => state.connection);
   const peers = useWorkspaceStore((state) => state.peers);
   const contextMenu = useContextMenu((state) => state.menu);
+  // Picking a library item shows its details in the Properties tab.
+  const pickedEntry = usePlacement((state) => state.entryId);
+  useEffect(() => {
+    if (pickedEntry) setRightTab("properties");
+  }, [pickedEntry]);
   const viewMode = useWorkspaceStore((state) => state.viewMode);
   const { setViewMode } = useWorkspaceStore.getState();
   const { setTool, selectEntity, requestCameraReset, requestFocus, setShowRoutes } = useWorkspaceStore.getState();
@@ -111,7 +112,7 @@ export default function App() {
       } else if (!mod && key === "h") {
         state.requestCameraReset();
       } else if (!mod && (key === "1" || key === "2" || key === "3")) {
-        state.setViewMode(key === "1" ? "plan" : key === "2" ? "2d" : "3d");
+        state.setViewMode(key === "1" ? "plan" : key === "2" ? "top" : "perspective");
       } else if (!mod && key === "p") {
         state.setShowPerf(!state.showPerf);
       } else if (key.startsWith("arrow") && state.selectedEntityId) {
@@ -162,46 +163,8 @@ export default function App() {
         <LeftPanel />
 
         <section className="editor-main" aria-label="3D workspace">
-          <div className="editor-toolbar">
-            <div className="segmented view-toggle" role="radiogroup" aria-label="View mode">
-              {([["plan", "Floor plan", "Architectural floor plan with door swings (1)"], ["2d", "2D", "2D top view (2)"], ["3d", "3D", "3D view (3)"]] as const).map(([mode, label, tip]) => (
-                <button key={mode} type="button" role="radio" aria-checked={viewMode === mode} className={viewMode === mode ? "active" : ""} onClick={() => setViewMode(mode)} title={tip}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <span className="toolbar-divider" />
-            <div className="tool-group">
-              {TOOLS.map((entry) => {
-                const disabled = entry.mesh && !selected?.mesh;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className={"tool-button" + (tool === entry.id ? " tool-button--active" : "")}
-                    onClick={() => setTool(entry.id)}
-                    disabled={disabled}
-                    aria-pressed={tool === entry.id}
-                    aria-label={entry.label}
-                    title={`${entry.label} (${entry.key})${disabled ? " — convert the object to an editable mesh first" : ""}`}
-                  >
-                    <entry.icon size={15} /> <span>{entry.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <span className="toolbar-divider" />
-            <button type="button" className="tool-button" onClick={() => selected && duplicate(selected)} disabled={!selected} title="Duplicate (⌘D)" aria-label="Duplicate"><Copy size={15} /> <span>Duplicate</span></button>
-            <button type="button" className="tool-button" onClick={deleteSelected} disabled={!selected} title="Delete (Del)" aria-label="Delete"><Trash2 size={15} /> <span>Delete</span></button>
-            <span className="toolbar-divider" />
-            <button type="button" className="tool-button" onClick={() => useWorkspaceStore.getState().undo()} disabled={history.past.length === 0} title={history.past.length ? `Undo ${history.past.at(-1)!.label} (⌘Z)` : "Nothing to undo"} aria-label="Undo"><Undo2 size={15} /> <span>Undo</span></button>
-            <button type="button" className="tool-button" onClick={() => useWorkspaceStore.getState().redo()} disabled={history.future.length === 0} title={history.future.length ? `Redo ${history.future[0]!.label} (⇧⌘Z)` : "Nothing to redo"} aria-label="Redo"><Redo2 size={15} /> <span>Redo</span></button>
-            <span className="toolbar-spacer" />
-            <button type="button" className={"tool-button" + (showRoutes ? " tool-button--active" : "")} onClick={() => setShowRoutes(!showRoutes)} title="Show A* walking routes from the door" aria-label="Walking routes"><Footprints size={15} /> <span>Routes</span></button>
-            <button type="button" className="tool-button" onClick={() => (selected ? requestFocus() : requestCameraReset())} title="Frame selection (F) · Reset view (H)"><Crosshair size={15} /> <span>{selected ? "Frame" : "Reset view"}</span></button>
-          </div>
-
           <div
+            ref={viewportRef}
             className="viewport-wrap"
             onDragOver={(event) => {
               if (!event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE) || !dragging.id) return;
@@ -223,6 +186,7 @@ export default function App() {
           >
             <div className="viewport-canvas"><SceneViewport /></div>
             {viewMode === "plan" ? <FloorPlan /> : null}
+            <ViewportChrome container={viewportRef} />
             <PerfOverlay />
             {tool === "vertex" || tool === "face" ? (
               <div className="mode-banner">
@@ -238,7 +202,7 @@ export default function App() {
                 <button type="button" onClick={() => setRightTab("properties")} title="Open properties"><SlidersHorizontal size={13} /></button>
               </div>
             ) : null}
-            {!selected ? <div className="viewport-hint">{viewMode === "2d" ? "Drag furniture to move it · drag empty space to pan · scroll to zoom · press 3 for 3D" : "Drag furniture to move it · drag empty space to orbit · right-drag to pan · scroll to zoom · press 2 for plan"}</div> : null}
+            {!selected ? <div className="viewport-hint">{viewMode !== "perspective" && viewMode !== "walk" ? "Drag furniture to move it · drag empty space to pan · scroll to zoom · press 3 for 3D" : "Drag furniture to move it · drag empty space to orbit · right-drag to pan · scroll to zoom · press 2 for plan"}</div> : null}
             {contextMenu && contextItem ? (
               <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()} role="menu">
                 <div className="context-title">{contextItem.name}</div>
@@ -256,19 +220,25 @@ export default function App() {
           </div>
 
           <footer className="statusbar">
-            <span>{TOOLS.find((entry) => entry.id === tool)!.label} tool</span>
+            {scene.rooms.length > 1 ? (
+              <select className="status-room" aria-label="Active room" value={activeRoomId} onChange={(event) => useWorkspaceStore.getState().setActiveRoom(event.target.value)}>
+                {scene.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+              </select>
+            ) : <span>{scene.rooms[0]?.name ?? "No room"}</span>}
             <span className="sep" />
-            <span>{selected ? selected.name : selectedRoom ? selectedRoom.name : "No selection"}</span>
+            <span>{selected || selectedRoom ? "1 selected" : "0 selected"}{selected ? ` · ${selected.name}` : selectedRoom ? ` · ${selectedRoom.name}` : ""}</span>
             <span className="sep" />
             <span>{scene.furniture.length.toLocaleString()} objects</span>
+            <span className="sep" />
+            <span title="Measured frames per second">{fps ? `${Math.round(fps)} FPS` : "— FPS"}</span>
             <span className="sep" />
             <button type="button" className={"status-validation status-validation--" + (errorCount ? "error" : warningCount ? "warning" : "ok")} onClick={() => setRightTab("issues")}>
               <CircleAlert size={12} />
               {validation ? (issues.length ? `${errorCount} errors · ${warningCount} warnings` : "Layout valid") : "Validating…"}
-              {validation ? <small>{validation.stats.durationMs.toFixed(1)} ms</small> : null}
+              {validation ? <small>Validation {validation.stats.durationMs.toFixed(1)} ms</small> : null}
             </button>
             <span className="statusbar-spacer" />
-            <span>{history.past.length} undo · {history.future.length} redo</span>
+            <span>{TOOLS.find((entry) => entry.id === tool)!.label} tool</span>
             <span className="sep" />
             <span>{connection === "online" ? `${peerCount} in session` : connection === "offline" ? "Offline (local)" : "Connecting…"}</span>
           </footer>

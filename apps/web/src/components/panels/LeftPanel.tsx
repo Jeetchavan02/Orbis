@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { ChevronRight, DoorOpen, Grid2X2, Layers, Lightbulb, Lock, Plus, Search } from "lucide-react";
+import { ChevronRight, DoorOpen, LayoutGrid, Layers, Lightbulb, Lock, Paintbrush, Plus, Search } from "lucide-react";
 import { boundsDimensions, meshBounds } from "@reality-builder/shared";
 import { catalogById, type GroupId } from "../../data/catalog";
 import { importModelFile } from "../../lib/glb";
@@ -15,7 +15,7 @@ export function placeCatalogItem(entry: { id: string }, at?: { x: number; z: num
 }
 
 export function LeftPanel() {
-  const [tab, setTab] = useState<"scene" | "library">("scene");
+  const [tab, setTab] = useState<"scene" | "library" | "elements" | "lights">("library");
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,11 +64,19 @@ export function LeftPanel() {
   };
 
   return (
+    <div className="left-dock">
+    <nav className="left-rail" aria-label="Editor sections">
+      {RAIL.map((entry) => (
+        <button key={entry.id} type="button" className={tab === entry.id ? "active" : ""} aria-pressed={tab === entry.id} onClick={() => setTab(entry.id)} title={entry.tip}>
+          <entry.icon size={18} /><span>{entry.label}</span>
+        </button>
+      ))}
+      <button type="button" onClick={() => { const room = activeRoom(useWorkspaceStore.getState().scene); if (room) selectEntity(room.id); }} title="Floor, wall and ceiling materials of the active room (opens in Properties)">
+        <Paintbrush size={18} /><span>Materials</span>
+      </button>
+    </nav>
     <aside className="left-panel" aria-label="Scene and library">
-      <div className="panel-tabs">
-        <button type="button" className={tab === "scene" ? "active" : ""} onClick={() => setTab("scene")}><Layers size={14} /> Scene</button>
-        <button type="button" className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Grid2X2 size={14} /> Library</button>
-      </div>
+      <div className="left-panel-head">{RAIL.find((entry) => entry.id === tab)!.title}</div>
 
       {tab === "scene" ? (
         <>
@@ -102,12 +110,20 @@ export function LeftPanel() {
           </div>
         </>
       ) : (
-        <Library onImport={() => fileRef.current?.click()} importing={importing} />
+        <Library key={tab} onImport={() => fileRef.current?.click()} importing={importing} initialGroup={tab === "elements" ? "openings" : tab === "lights" ? "lighting" : "all"} />
       )}
       <input ref={fileRef} type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden onChange={(event) => {
         const file = event.target.files?.[0];
         if (file) void importModel(file);
       }} />
     </aside>
+    </div>
   );
 }
+
+const RAIL = [
+  { id: "library", label: "Library", title: "Asset library", icon: LayoutGrid, tip: "Furniture and decor" },
+  { id: "scene", label: "Rooms", title: "Rooms & objects", icon: Layers, tip: "Rooms and the objects in them" },
+  { id: "elements", label: "Elements", title: "Doors & windows", icon: DoorOpen, tip: "Doors and windows" },
+  { id: "lights", label: "Lights", title: "Lighting", icon: Lightbulb, tip: "Lamps and light fixtures" },
+] as const;

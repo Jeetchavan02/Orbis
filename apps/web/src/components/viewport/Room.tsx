@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Text } from "@react-three/drei";
-import { MathUtils, Vector3, type Group } from "three";
+import { CanvasTexture, MathUtils, RepeatWrapping, SRGBColorSpace, Vector3, type Group } from "three";
 import type { Opening, Room, WallSide } from "@reality-builder/shared";
 
 const DEG = Math.PI / 180;
@@ -144,7 +144,7 @@ export const RoomShell = memo(function RoomShell({ room, cutaway, showDimensions
       </mesh>
       <mesh position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow userData={{ floor: true }}>
         <planeGeometry args={[width, depth]} />
-        <meshStandardMaterial color={room.floorColor} roughness={0.78} />
+        <meshStandardMaterial color={room.floorColor} roughness={0.78} map={woodGrain(width, depth)} />
       </mesh>
       {/* Subtle plank lines */}
       {Array.from({ length: Math.floor(width / 0.2) }, (_, index) => (
@@ -169,3 +169,39 @@ export const RoomShell = memo(function RoomShell({ room, cutaway, showDimensions
     </group>
   );
 });
+
+const grainCache = new Map<string, CanvasTexture>();
+/** Procedural wood grain (multiplied by the floor colour), cached per floor size. */
+function woodGrain(width: number, depth: number) {
+  const key = width.toFixed(2) + "x" + depth.toFixed(2);
+  const cached = grainCache.get(key);
+  if (cached) return cached;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 512;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, 512, 512);
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let plank = 0; plank < 8; plank += 1) {
+    const x = plank * 64;
+    g.fillStyle = `rgb(0 0 0 / ${0.02 + rand() * 0.06})`;
+    g.fillRect(x, 0, 64, 512);
+    for (let line = 0; line < 14; line += 1) {
+      g.strokeStyle = `rgb(60 35 15 / ${0.04 + rand() * 0.08})`;
+      g.lineWidth = 0.6 + rand() * 1.2;
+      g.beginPath();
+      const lx = x + 4 + rand() * 56;
+      g.moveTo(lx, 0);
+      for (let y = 0; y <= 512; y += 32) g.lineTo(lx + Math.sin(y / 60 + plank + line) * 2.5, y);
+      g.stroke();
+    }
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  texture.wrapS = texture.wrapT = RepeatWrapping;
+  texture.repeat.set(width / 1.6, depth / 1.6);
+  texture.anisotropy = 4;
+  grainCache.set(key, texture);
+  return texture;
+}

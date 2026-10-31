@@ -604,6 +604,22 @@ export function renderFamily(ctx: Ctx, family: string): ReactNode {
       if (bool(p, "round")) return <group><C r={w / 2} h={d} at={[0, h / 2, -d / 2]} m={{ color: c, metalness: 0.6, roughness: 0.4 }} rot={[Math.PI / 2, 0, 0]} seg={40} /><C r={w / 2 - 0.03} h={0.005} at={[0, h / 2, d / 2 - 0.004]} m={glass} rot={[Math.PI / 2, 0, 0]} seg={40} /></group>;
       return <group><B s={[w, h, d * 0.6]} at={[x0, 0, z0]} m={{ color: c, metalness: 0.6, roughness: 0.4 }} cast={s} /><B s={[w - 0.05, h - 0.05, 0.005]} at={[x0 + 0.025, 0.025, z0 + d * 0.6]} m={glass} cast={false} /></group>;
     }
+    case "curtains": {
+      // Rod plus two gathered panels; each panel is a row of soft folds.
+      const fabric: Mat = { color: c, roughness: 0.95 };
+      const panel = w * 0.28;
+      const folds = Math.max(4, Math.round(panel / 0.07));
+      const fold = (side: number) => Array.from({ length: folds }, (_, index) => (
+        <C key={side + ":" + index} r={panel / folds / 1.6} h={h - 0.08} at={[side * (w / 2 - panel / 2) + (index - (folds - 1) / 2) * (panel / folds), 0.02, (index % 2 ? 0.015 : -0.015)]} m={fabric} seg={10} />
+      ));
+      return (
+        <group>
+          <C r={0.012} h={w + 0.1} at={[0, h - 0.03 - (w + 0.1) / 2, -d / 2 + 0.02]} m={METAL_DARK} rot={[0, 0, -Math.PI / 2]} />
+          {fold(-1)}
+          {fold(1)}
+        </group>
+      );
+    }
     case "artwork":
       return (
         <group>

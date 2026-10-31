@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "id": "template-kitchen",
+  "name": "Modern kitchen",
+  "coordinateSystem": "y-up-xz-meters",
+  "rooms": [
+    {
+      "id": "kitchen-room",
+      "name": "Modern kitchen",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "dimensions": {
+        "width": 4.4,
+        "depth": 3.8,
+        "height": 2.7,
+        "wallThickness": 0.14
+      },
+      "yawDegrees": 0,
+      "openings": [
+        {
+          "id": "kitchen-opening-0",
+          "kind": "door",
+          "wall": "south",
+          "offset": 1.6,
+          "width": 0.9,
+          "height": 2.05,
+          "sillHeight": 0,
+          "hinge": "left",
+          "swing": "in"
+        },
+        {
+          "id": "kitchen-opening-1",
+          "kind": "window",
+          "wall": "east",
+          "offset": -0.6,
+          "width": 1,
+          "height": 1.3,
+          "sillHeight": 0.9,
+          "hinge": "left",
+          "swing": "in"
+        }
+      ],
+      "floorColor": "#d6cfc4",
+      "wallColor": "#f1eee8",
+      "version": 1
+    }
+  ],
+  "furniture": [
+    {
+      "id": "kitchen-1",
+      "roomId": "kitchen-room",
+      "name": "Base cabinets",
+      "category": "storage",
+      "catalogItemId": "kitchen-counter-base-cabinets-2-4-m-sage",
+      "position": {
+        "x": -0.8,
+        "y": 0,
+        "z": -1.6
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 2.4,
+        "depth": 0.6,
+        "height": 0.9
+      },
+      "color": "#9aab95",
+      "constraints": {
+        "frontClearance": 1
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-2",
+      "roomId": "kitchen-room",
+      "name": "Fridge",
+      "category": "storage",
+      "catalogItemId": "fridge-fridge-stainless",
+      "position": {
+        "x": 1,
+        "y": 0,
+        "z": -1.55
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.7,
+        "depth": 0.7,
+        "height": 1.85
+      },
+      "color": "#c7cacd",
+      "constraints": {
+        "frontClearance": 0.9
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-3",
+      "roomId": "kitchen-room",
+      "name": "Range cooker",
+      "category": "other",
+      "catalogItemId": "stove-range-cooker-stainless",
+      "position": {
+        "x": 1.85,
+        "y": 0,
+        "z": -1.59
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.6,
+        "depth": 0.62,
+        "height": 0.9
+      },
+      "color": "#c7cacd",
+      "constraints": {
+        "frontClearance": 0.9
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-4",
+      "roomId": "kitchen-room",
+      "name": "Kitchen island",
+      "category": "storage",
+      "catalogItemId": "kitchen-island-kitchen-island-white",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0.4
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 1.8,
+        "depth": 0.95,
+        "height": 0.92
+      },
+      "color": "#eeeae3",
+      "constraints": {
+        "frontClearance": 0.9
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-5",
+      "roomId": "kitchen-room",
+      "name": "Bar stool",
+      "category": "seating",
+      "catalogItemId": "stool-round-bar-stool-oak",
+      "position": {
+        "x": -1.15,
+        "y": 0,
+        "z": 0.4
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.75
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-6",
+      "roomId": "kitchen-room",
+      "name": "Bar stool",
+      "category": "seating",
+      "catalogItemId": "stool-round-bar-stool-oak",
+      "position": {
+        "x": 1.15,
+        "y": 0,
+        "z": 0.4
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.75
+      },
+      "color": "#c49a6c",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-7",
+      "roomId": "kitchen-room",
+      "name": "Pendant",
+      "category": "lighting",
+      "catalogItemId": "pendant-globe-pendant-brass",
+      "position": {
+        "x": -0.45,
+        "y": 1.85,
+        "z": 0.4
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.8
+      },
+      "color": "#b08d57",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 14,
+        "color": "#ffd2a0",
+        "height": 0.1
+      },
+      "version": 1
+    },
+    {
+      "id": "kitchen-8",
+      "roomId": "kitchen-room",
+      "name": "Pendant",
+      "category": "lighting",
+      "catalogItemId": "pendant-globe-pendant-brass",
+      "position": {
+        "x": 0.45,
+        "y": 1.85,
+        "z": 0.4
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.4,
+        "depth": 0.4,
+        "height": 0.8
+      },
+      "color": "#b08d57",
+      "constraints": {
+        "frontClearance": 0
+      },
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 14,
+        "color": "#ffd2a0",
+        "height": 0.1
+      },
+      "version": 1
+    }
+  ],
+  "rules": {
+    "collisions": true,
+    "boundaries": true,
+    "clearances": true,
+    "pathways": true,
+    "vastu": false,
+    "minPassageWidth": 0.6,
+    "categoryClearance": {
+      "beds": 0.6,
+      "storage": 0.7,
+      "seating": 0.45,
+      "tables": 0,
+      "lighting": 0,
+      "decor": 0,
+      "other": 0
+    }
+  },
+  "environment": {
+    "mode": "day",
+    "artificialLightScale": 1,
+    "shadows": true,
+    "latitude": 19.076,
+    "longitude": 72.877,
+    "northOffsetDegrees": 0
+  },
+  "roomType": "kitchen",
+  "settingsVersion": 1
+}

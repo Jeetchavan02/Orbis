@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Users } from "lucide-react";
+import { Bell, Home, PersonStanding, Users } from "lucide-react";
 import { useShareDialog } from "../../lib/ui";
 import { Check, ChevronDown, Layers, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
 import type { EnvironmentMode } from "@reality-builder/shared";
@@ -30,6 +30,8 @@ export function TopBar() {
   const saveStatus = useWorkspaceStore((state) => state.saveStatus);
   const showPerf = useWorkspaceStore((state) => state.showPerf);
   const activeRoomId = useWorkspaceStore((state) => state.activeRoomId);
+  const viewMode = useWorkspaceStore((state) => state.viewMode);
+  const { setViewMode } = useWorkspaceStore.getState();
   const { undo, redo, dispatch, save, replaceScene, setShowPerf, notify } = useWorkspaceStore.getState();
   const [menuOpen, setMenuOpen] = useState(false);
   const [name, setName] = useState(scene.name);
@@ -62,6 +64,7 @@ export function TopBar() {
   return (
     <header className="topbar">
       <div className="topbar-left">
+        <a className="icon-button" href="/" title="Back to projects" aria-label="Back to projects"><Home size={16} /></a>
         <div className="brand" aria-label="Reality Builder">
           <span className="brand-mark"><span /><span /><span /><span /></span>
           <span className="brand-name">Reality Builder</span>
@@ -108,6 +111,9 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
+        <button type="button" className="icon-button" onClick={undo} disabled={history.past.length === 0} title={history.past.length ? `Undo ${history.past.at(-1)!.label} (⌘Z)` : "Nothing to undo"} aria-label="Undo"><Undo2 size={16} /></button>
+        <button type="button" className="icon-button" onClick={redo} disabled={history.future.length === 0} title={history.future.length ? `Redo ${history.future[0]!.label} (⇧⌘Z)` : "Nothing to redo"} aria-label="Redo"><Redo2 size={16} /></button>
+        <span className="divider" />
 
         <div className="presence" aria-label="Collaborators">
           <span className="avatar avatar--self" style={{ background: currentIdentity.color }} title={currentIdentity.name + " (you)"}>{initials(currentIdentity.name)}</span>
@@ -123,6 +129,8 @@ export function TopBar() {
           {connection === "online" ? "Live" : connection === "connecting" ? "Connecting" : "Offline"}
         </span>
         <button type="button" className={"icon-button" + (showPerf ? " icon-button--active" : "")} onClick={() => setShowPerf(!showPerf)} title="Performance overlay (P)" aria-label="Performance overlay"><Gauge size={16} /></button>
+        <button type="button" className={"ghost-button" + (viewMode === "walk" ? " ghost-button--active" : "")} onClick={() => setViewMode(viewMode === "walk" ? "perspective" : "walk")} title="Walk through the room at eye height (WASD to move)"><PersonStanding size={14} /> {viewMode === "walk" ? "Exit walk" : "Walkthrough"}</button>
+        <NotificationsBell />
         <button type="button" className="ghost-button" onClick={() => useShareDialog.getState().setOpen(true)} title="Invite collaborators"><Users size={14} /> Share</button>
         <button type="button" className="primary-button" onClick={save} title="Save (⌘S)"><Save size={14} /> Save</button>
         <div className="menu" ref={menuRef}>
@@ -156,4 +164,37 @@ export function TopBar() {
 
 function initials(name: string) {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function NotificationsBell() {
+  const log = useWorkspaceStore((state) => state.activityLog);
+  const [open, setOpen] = useState(false);
+  const [seen, setSeen] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [open]);
+  const unread = log.filter((entry) => entry.id > seen).length;
+  return (
+    <div className="menu" ref={ref}>
+      <button type="button" className="icon-button bell" onClick={() => { setOpen(!open); setSeen(log[0]?.id ?? 0); }} aria-label="Activity" title="Activity">
+        <Bell size={16} />{unread ? <span className="bell-dot">{Math.min(unread, 9)}</span> : null}
+      </button>
+      {open ? (
+        <div className="menu-popover activity-popover" role="dialog" aria-label="Activity">
+          <div className="context-title">Activity</div>
+          {log.length ? log.map((entry) => (
+            <div key={entry.id} className={"activity-row activity-row--" + entry.tone}>
+              <span>{entry.text}</span><small>{relativeTime(new Date(entry.at).toISOString())}</small>
+            </div>
+          )) : <p className="field-note pad">No activity yet.</p>}
+        </div>
+      ) : null}
+    </div>
+  );
 }

@@ -126,7 +126,8 @@ export function sunStudy(scene: Scene, date: Date, mode: "instant" | "daily" = "
   const columns = Math.max(1, Math.floor(room.dimensions.width / cellSize));
   const rows = Math.max(1, Math.floor(room.dimensions.depth / cellSize));
   const tree = new RBush<Box>();
-  const occluders = scene.furniture.filter((item) => item.roomId === room.id && item.dimensions.height > 0.03);
+  // Floor coverings (rugs, drawn-back curtains) never block sun rays.
+  const occluders = scene.furniture.filter((item) => item.roomId === room.id && item.dimensions.height > 0.03 && !item.constraints?.floorCovering);
   tree.load(occluders.map((item) => {
     const box = polygonAabb(footprint(item));
     return { minX: box.minX, minY: box.minZ, maxX: box.maxX, maxY: box.maxZ, item };

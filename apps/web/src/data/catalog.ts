@@ -6,7 +6,7 @@ export type Family =
   | "bed" | "bunk-bed" | "crib" | "nightstand" | "dresser" | "cabinet" | "wardrobe" | "bookshelf" | "wall-shelf" | "tv-unit"
   | "table" | "round-table" | "coffee-table" | "side-table" | "desk"
   | "floor-lamp" | "table-lamp" | "desk-lamp" | "pendant" | "ceiling-light"
-  | "rug" | "plant" | "vase" | "mirror" | "artwork" | "tv" | "monitor"
+  | "rug" | "plant" | "vase" | "mirror" | "artwork" | "curtains" | "tv" | "monitor"
   | "kitchen-counter" | "kitchen-island" | "fridge" | "stove" | "sink-cabinet"
   | "toilet" | "vanity" | "bathtub" | "shower" | "lounger" | "parasol" | "toy-box" | "box"
   | "door" | "window";
@@ -308,6 +308,11 @@ for (const [label, shape] of [["Tall vase", "tall"], ["Round vase", "round"], ["
 for (const [label, params, dims, elevation] of [["Floor mirror", { frame: "thin" }, { width: 0.6, depth: 0.05, height: 1.7 }, 0], ["Round wall mirror", { round: true }, { width: 0.7, depth: 0.04, height: 0.7 }, 1.3], ["Arched wall mirror", { arch: true }, { width: 0.6, depth: 0.04, height: 0.9 }, 1.2]] as const) {
   for (const swatch of [METAL[0]!, METAL[1]!]) {
     add({ name: `${label} — ${swatch.name}`, category: "decor", group: "decor", family: "mirror", elevation, dimensions: dims, color: swatch.color, params, rooms: ["bedroom", "bathroom", "living"], constraints: { frontClearance: 0 } });
+  }
+}
+for (const swatch of [{ name: "Linen", color: "#e6dccb" }, { name: "Mauve", color: "#b493a4" }, { name: "Sage", color: "#a3b39a" }, { name: "Charcoal", color: "#4a4a4d" }]) {
+  for (const [label, w] of [["Curtains 1.4 m", 1.4], ["Curtains 2.0 m", 2.0], ["Curtains 2.8 m", 2.8]] as const) {
+    add({ name: `${label} — ${swatch.name}`, category: "decor", group: "decor", family: "curtains", dimensions: { width: w, depth: 0.12, height: 2.45 }, color: swatch.color, params: {}, rooms: ["living", "bedroom", "dining", "office", "study", "kids"], constraints: { frontClearance: 0, floorCovering: true } });
   }
 }
 const ART = [{ label: "Abstract canvas", colors: ["#d98c5f", "#3f6c8f", "#e8d8b0"] }, { label: "Landscape print", colors: ["#7fa3c2", "#7f9e6b", "#e6d6b8"] }, { label: "Botanical print", colors: ["#4f7f55", "#e9e2cf", "#2f4f3a"] }, { label: "Line art", colors: ["#f2efe8", "#2a2a2a", "#c9b79a"] }];

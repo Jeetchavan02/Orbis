@@ -24,6 +24,15 @@ export function sessionIdentity() {
   } catch {
     // Storage may be unavailable (private mode); fall through to a fresh profile.
   }
+  // A default profile set on the homepage (Settings) applies to new tabs.
+  if (!profile) {
+    try {
+      const stored = localStorage.getItem("rb.profile");
+      if (stored) profile = JSON.parse(stored) as { name: string; color: string };
+    } catch {
+      // Ignore unreadable storage.
+    }
+  }
   if (!profile) {
     const random = crypto.getRandomValues(new Uint32Array(3));
     profile = {
@@ -37,6 +46,26 @@ export function sessionIdentity() {
     }
   }
   return { clientId: crypto.randomUUID(), ...profile };
+}
+
+/** Default profile for the homepage greeting and new tabs. */
+export function loadProfile(): { name: string; color: string } {
+  try {
+    const stored = localStorage.getItem("rb.profile");
+    if (stored) return JSON.parse(stored) as { name: string; color: string };
+  } catch {
+    // Fall through.
+  }
+  return { name: "Designer", color: "#6a3de8" };
+}
+
+export function saveDefaultProfile(name: string, color: string) {
+  try {
+    localStorage.setItem("rb.profile", JSON.stringify({ name, color }));
+    sessionStorage.setItem("rb.identity", JSON.stringify({ name, color }));
+  } catch {
+    // Not persisted.
+  }
 }
 
 /** Persists a new display name/colour for this tab. */
