@@ -10,14 +10,15 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "@reality-builder/shared": "*",
-    "@reality-builder/spatial-engine": "*",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
+    "@reality-builder/shared": "*",
+    "@reality-builder/spatial-engine": "*",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "three": "^0.180.0",
+    "three-mesh-bvh": "^0.9.1",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

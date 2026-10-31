@@ -7,3 +7,6 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+
+# Scenes saved by the local server
+server/data/

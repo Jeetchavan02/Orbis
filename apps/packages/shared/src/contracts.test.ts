@@ -5,7 +5,7 @@ import {
   FurnitureObjectSchema,
   SceneActionSchema,
   SceneSchema,
-  ValidationViolationSchema,
+  ValidationIssueSchema,
 } from "./index.js";
 
 const fixturePath = resolve(process.cwd(), "fixtures/studio-scene.json");
@@ -36,13 +36,14 @@ describe("shared scene contracts", () => {
       furnitureId: "furniture-chair",
     }).type).toBe("furniture.delete");
 
-    expect(ValidationViolationSchema.parse({
+    expect(ValidationIssueSchema.parse({
       id: "violation-1",
-      code: "clearance.insufficient",
+      ruleId: "clearance.front",
       severity: "warning",
       message: "Clearance is below the requested threshold.",
-      entityIds: ["furniture-chair"],
-      measurements: { clearanceMeters: 0.35 },
+      objectIds: ["furniture-chair"],
+      highlight: { objectIds: ["furniture-chair"], zones: [] },
+      measured: 0.35,
     }).severity).toBe("warning");
   });
 });

@@ -1,401 +1,259 @@
 import { useEffect, useState } from "react";
 import {
-  Activity,
-  Box,
-  ChevronDown,
-  ChevronRight,
-  CircleHelp,
-  Eye,
-  Grid2X2,
-  Layers,
+  CircleAlert,
+  Copy,
+  Crosshair,
+  Footprints,
+  Lock,
+  Maximize2,
+  MousePointer2,
   Move3D,
-  Plus,
+  RectangleHorizontal,
   Rotate3D,
-  Search,
-  Settings2,
-  Share2,
+  RotateCw,
   SlidersHorizontal,
-  Undo2,
-  Redo2,
+  Trash2,
+  Unlock,
+  Waypoints,
 } from "lucide-react";
-import { ApiHealthSchema, type FurnitureObject } from "@reality-builder/shared";
-import { getSpatialEngineStatus } from "@reality-builder/spatial-engine";
 import { SceneViewport } from "./components/SceneViewport";
-import { starterScene } from "./data/scene";
-import { useWorkspaceStore } from "./store/workspace";
+import { duplicate, Inspector } from "./components/panels/Inspector";
+import { IssuesPanel } from "./components/panels/IssuesPanel";
+import { CATALOG_DRAG_TYPE, LeftPanel, placeCatalogItem } from "./components/panels/LeftPanel";
+import { ConflictDialog, Notices, OfflineDialog, PerfOverlay } from "./components/panels/Overlays";
+import { RulesPanel } from "./components/panels/RulesPanel";
+import { TopBar } from "./components/panels/TopBar";
+import { catalog } from "./data/catalog";
+import { viewportBridge } from "./lib/perf";
+import { useContextMenu } from "./lib/ui";
+import { useWorkspaceStore, type TransformTool } from "./store/workspace";
 
-type ApiState = "checking" | "connected" | "offline";
+type RightTab = "properties" | "issues" | "rules";
 
-function PropertyValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="property-value">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+const TOOLS: { id: TransformTool; label: string; key: string; icon: typeof Move3D; mesh?: boolean }[] = [
+  { id: "select", label: "Select", key: "Q", icon: MousePointer2 },
+  { id: "translate", label: "Move", key: "W", icon: Move3D },
+  { id: "rotate", label: "Rotate", key: "E", icon: Rotate3D },
+  { id: "scale", label: "Resize", key: "R", icon: Maximize2 },
+  { id: "vertex", label: "Vertex", key: "V", icon: Waypoints, mesh: true },
+  { id: "face", label: "Face", key: "G", icon: RectangleHorizontal, mesh: true },
+];
+
+function deleteSelected() {
+  const { scene, selectedEntityId, dispatch, selectEntity } = useWorkspaceStore.getState();
+  const item = scene.furniture.find((entry) => entry.id === selectedEntityId);
+  if (item && dispatch({ type: "furniture.delete", furnitureId: item.id }, { base: { [item.id]: item.version } })) selectEntity("");
 }
 
-function formatMeters(value: number) {
-  return value.toFixed(2) + " m";
+function rotateSelected(degrees: number) {
+  const { scene, selectedEntityId, dispatch } = useWorkspaceStore.getState();
+  const item = scene.furniture.find((entry) => entry.id === selectedEntityId);
+  if (item) dispatch({ type: "furniture.update", furnitureId: item.id, patch: { yawDegrees: (((item.yawDegrees + degrees) % 360) + 360) % 360 } });
 }
 
-function App() {
-  const [apiState, setApiState] = useState<ApiState>("checking");
-  const selectedEntityId = useWorkspaceStore((state) => state.selectedEntityId);
-  const resetCameraSignal = useWorkspaceStore((state) => state.resetCameraSignal);
-  const selectEntity = useWorkspaceStore((state) => state.selectEntity);
-  const requestCameraReset = useWorkspaceStore((state) => state.requestCameraReset);
-  const room = starterScene.rooms[0];
-  const selectedFurniture = starterScene.furniture.find(
-    (item) => item.id === selectedEntityId,
-  );
-  const engineStatus = getSpatialEngineStatus();
+export default function App() {
+  const [rightTab, setRightTab] = useState<RightTab>("properties");
+  const scene = useWorkspaceStore((state) => state.scene);
+  const tool = useWorkspaceStore((state) => state.tool);
+  const selectedId = useWorkspaceStore((state) => state.selectedEntityId);
+  const validation = useWorkspaceStore((state) => state.validation);
+  const history = useWorkspaceStore((state) => state.history);
+  const showRoutes = useWorkspaceStore((state) => state.showRoutes);
+  const connection = useWorkspaceStore((state) => state.connection);
+  const peers = useWorkspaceStore((state) => state.peers);
+  const contextMenu = useContextMenu((state) => state.menu);
+  const { setTool, selectEntity, requestCameraReset, requestFocus, setShowRoutes } = useWorkspaceStore.getState();
+
+  const selected = scene.furniture.find((item) => item.id === selectedId);
+  const selectedRoom = scene.rooms.find((room) => room.id === selectedId);
+  const issues = validation?.issues ?? [];
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.filter((issue) => issue.severity === "warning").length;
 
   useEffect(() => {
-    let active = true;
-
-    async function checkApi() {
-      try {
-        const response = await fetch("/api/health");
-        if (!response.ok) throw new Error("Health request failed");
-        const payload: unknown = await response.json();
-        ApiHealthSchema.parse(payload);
-        if (active) setApiState("connected");
-      } catch {
-        if (active) setApiState("offline");
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      const state = useWorkspaceStore.getState();
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) state.redo();
+        else state.undo();
+      } else if (mod && key === "y") {
+        event.preventDefault();
+        state.redo();
+      } else if (mod && key === "s") {
+        event.preventDefault();
+        state.save();
+      } else if (mod && key === "d") {
+        event.preventDefault();
+        const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
+        if (item) duplicate(item);
+      } else if (key === "delete" || key === "backspace") {
+        deleteSelected();
+      } else if (key === "escape") {
+        useContextMenu.getState().close();
+        if (state.tool === "vertex" || state.tool === "face") state.setTool("translate");
+        else state.selectEntity("");
+      } else if (!mod && key === "f") {
+        if (state.selectedEntityId) state.requestFocus();
+        else state.requestCameraReset();
+      } else if (!mod && key === "h") {
+        state.requestCameraReset();
+      } else if (!mod && key === "p") {
+        state.setShowPerf(!state.showPerf);
+      } else if (!mod && key === "[") {
+        rotateSelected(-15);
+      } else if (!mod && key === "]") {
+        rotateSelected(15);
+      } else if (!mod) {
+        const match = TOOLS.find((entry) => entry.key.toLowerCase() === key);
+        if (!match) return;
+        const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
+        if (match.mesh && !item?.mesh) {
+          state.notify("info", "Select an object and use “Convert to editable mesh” in the inspector first.");
+          return;
+        }
+        state.setTool(match.id);
       }
-    }
-
-    void checkApi();
-    const interval = window.setInterval(checkApi, 15000);
-
-    return () => {
-      active = false;
-      window.clearInterval(interval);
     };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const handleSelect = (entityId: string) => selectEntity(entityId);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => useContextMenu.getState().close();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("wheel", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("wheel", close);
+    };
+  }, [contextMenu]);
+
+  const contextItem = contextMenu ? scene.furniture.find((item) => item.id === contextMenu.id) : undefined;
+  const peerCount = peers.length;
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-cluster">
-          <div className="brand-mark" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="brand-copy">
-            <span className="brand-name">reality builder</span>
-            <span className="brand-caption">SPATIAL WORKSPACE</span>
-          </div>
-          <div className="topbar-divider" />
-          <button className="project-switcher" type="button" title="Project menu is not implemented yet">
-            <span className="project-icon"><Layers size={16} /></span>
-            <span className="project-title">Quiet afternoon studio</span>
-            <ChevronDown size={15} className="muted-icon" />
-          </button>
-          <span className="draft-pill">SAMPLE SCENE</span>
-        </div>
-
-        <div className="topbar-actions">
-          <div className={"api-status api-status--" + apiState} aria-live="polite">
-            <span className="status-dot" />
-            <span>{apiState === "connected" ? "API connected" : apiState === "offline" ? "API offline" : "Checking API"}</span>
-          </div>
-          <button className="icon-button compact-hide" type="button" disabled title="Settings are not implemented yet" aria-label="Settings">
-            <Settings2 size={17} />
-          </button>
-          <button className="share-button" type="button" disabled title="Sharing is planned for a later phase">
-            <Share2 size={15} />
-            <span>Share</span>
-            <span className="coming-soon">LATER</span>
-          </button>
-          <button className="avatar-button" type="button" disabled title="Accounts are not implemented yet" aria-label="Account">
-            RB
-          </button>
-        </div>
-      </header>
-
+      <TopBar />
       <div className="workspace">
-        <aside className="left-panel" aria-label="Scene sidebar">
-          <div className="sidebar-tabs">
-            <button className="sidebar-tab sidebar-tab--active" type="button">
-              <Layers size={15} /> Scene
-            </button>
-            <button className="sidebar-tab" type="button" disabled title="Asset catalog is planned for a later phase">
-              <Grid2X2 size={15} /> Catalog <span className="tab-later">LATER</span>
-            </button>
-          </div>
+        <LeftPanel />
 
-          <div className="scene-summary">
-            <div className="scene-summary-icon"><Box size={17} /></div>
-            <div className="scene-summary-copy">
-              <span className="section-eyebrow">CURRENT SCENE</span>
-              <strong>{starterScene.name}</strong>
-            </div>
-            <ChevronDown size={15} className="muted-icon" />
-          </div>
-
-          <div className="panel-section-heading">
-            <span>ROOMS</span>
-            <button className="tiny-icon-button" type="button" disabled title="Room creation is planned for Phase 2" aria-label="Add room">
-              <Plus size={15} />
-            </button>
-          </div>
-          <button className="room-row" type="button" onClick={() => handleSelect(room.id)}>
-            <span className="room-row-icon"><Layers size={15} /></span>
-            <span className="room-row-label">{room.name}</span>
-            <span className="room-area">{(room.dimensions.width * room.dimensions.depth).toFixed(1)} m²</span>
-          </button>
-
-          <div className="panel-section-heading object-heading">
-            <span>OBJECTS <span className="count-badge">{starterScene.furniture.length}</span></span>
-            <button className="tiny-icon-button" type="button" disabled title="Object placement is planned for Phase 2" aria-label="Add object">
-              <Plus size={15} />
-            </button>
-          </div>
-          <label className="search-field">
-            <Search size={15} />
-            <input aria-label="Search scene objects" placeholder="Find in scene" disabled />
-            <span>⌘ K</span>
-          </label>
-
-          <div className="object-list">
-            {starterScene.furniture.map((item) => (
-              <ObjectRow
-                key={item.id}
-                item={item}
-                selected={selectedEntityId === item.id}
-                onClick={() => handleSelect(item.id)}
-              />
-            ))}
-          </div>
-
-          <div className="sidebar-footer">
-            <div className="engine-status-icon"><Activity size={15} /></div>
-            <div>
-              <strong>Spatial engine</strong>
-              <span>{engineStatus.status === "scaffold" ? "Scaffold only · no validation yet" : ""}</span>
-            </div>
-          </div>
-        </aside>
-
-        <section className="editor-main" aria-label="3D room workspace">
+        <section className="editor-main" aria-label="3D workspace">
           <div className="editor-toolbar">
-            <div className="view-switch" aria-label="View mode">
-              <button className="view-button" type="button" disabled title="2D editing is planned for Phase 2">2D</button>
-              <button className="view-button view-button--active" type="button" aria-pressed="true">3D</button>
+            <div className="tool-group">
+              {TOOLS.map((entry) => {
+                const disabled = entry.mesh && !selected?.mesh;
+                return (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    className={"tool-button" + (tool === entry.id ? " tool-button--active" : "")}
+                    onClick={() => setTool(entry.id)}
+                    disabled={disabled}
+                    aria-pressed={tool === entry.id}
+                    title={`${entry.label} (${entry.key})${disabled ? " — convert the object to an editable mesh first" : ""}`}
+                  >
+                    <entry.icon size={15} /> <span>{entry.label}</span>
+                  </button>
+                );
+              })}
             </div>
             <span className="toolbar-divider" />
-            <button className="tool-button tool-button--selected" type="button" aria-label="Select mode">
-              <Eye size={16} /> <span>Select</span>
-            </button>
-            <button className="tool-button" type="button" disabled title="Move tools are planned for Phase 2">
-              <Move3D size={16} /> <span>Move</span>
-            </button>
-            <button className="tool-button" type="button" disabled title="Rotation tools are planned for Phase 2">
-              <Rotate3D size={16} /> <span>Rotate</span>
-            </button>
+            <button type="button" className="tool-button" onClick={() => selected && duplicate(selected)} disabled={!selected} title="Duplicate (⌘D)"><Copy size={15} /> <span>Duplicate</span></button>
+            <button type="button" className="tool-button" onClick={deleteSelected} disabled={!selected} title="Delete (Del)"><Trash2 size={15} /> <span>Delete</span></button>
             <span className="toolbar-spacer" />
-            <button className="icon-button undo-button" type="button" disabled title="Undo is planned for a later phase" aria-label="Undo">
-              <Undo2 size={16} />
-            </button>
-            <button className="icon-button undo-button" type="button" disabled title="Redo is planned for a later phase" aria-label="Redo">
-              <Redo2 size={16} />
-            </button>
-            <span className="toolbar-divider" />
-            <span className="units-label">METERS</span>
+            <button type="button" className={"tool-button" + (showRoutes ? " tool-button--active" : "")} onClick={() => setShowRoutes(!showRoutes)} title="Show A* walking routes from the door"><Footprints size={15} /> <span>Routes</span></button>
+            <button type="button" className="tool-button" onClick={() => (selected ? requestFocus() : requestCameraReset())} title="Frame selection (F) · Reset view (H)"><Crosshair size={15} /> <span>{selected ? "Frame" : "Reset view"}</span></button>
           </div>
 
-          <div className="viewport-wrap">
-            <div className="viewport-canvas">
-              <SceneViewport
-                room={room}
-                furniture={starterScene.furniture}
-                selectedEntityId={selectedEntityId}
-                resetCameraSignal={resetCameraSignal}
-                onSelectEntity={handleSelect}
-              />
-            </div>
-            <div className="viewport-label">
-              <span className="viewport-live-dot" />
-              <span>3D PREVIEW</span>
-              <span className="label-divider" />
-              <span>PROXY GEOMETRY</span>
-            </div>
-            <div className="viewport-top-right">
-              <span className="mode-tag">PERSPECTIVE</span>
-              <button className="viewport-icon-button" type="button" disabled title="Grid settings are planned for Phase 2" aria-label="Grid settings">
-                <Grid2X2 size={16} />
-              </button>
-              <button className="viewport-icon-button" type="button" disabled title="View options are planned for a later phase" aria-label="View options">
-                <SlidersHorizontal size={16} />
-              </button>
-            </div>
-            <div className="viewport-help-card">
-              <span className="help-card-icon"><CircleHelp size={15} /></span>
-              <span>Drag to orbit <b>·</b> Scroll to zoom <b>·</b> Right-drag to pan</span>
-            </div>
-            <button className="reset-view-button" onClick={requestCameraReset} type="button">
-              <span className="reset-view-glyph">↺</span> Reset view
-            </button>
-            <div className="viewport-scale"><span /> 1 m</div>
+          <div
+            className="viewport-wrap"
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes(CATALOG_DRAG_TYPE)) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }
+            }}
+            onDrop={(event) => {
+              const id = event.dataTransfer.getData(CATALOG_DRAG_TYPE);
+              const entry = catalog.find((item) => item.id === id);
+              if (!entry) return;
+              event.preventDefault();
+              placeCatalogItem(entry, viewportBridge.screenToFloor?.(event.clientX, event.clientY) ?? undefined);
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <div className="viewport-canvas"><SceneViewport /></div>
+            <PerfOverlay />
+            {tool === "vertex" || tool === "face" ? (
+              <div className="mode-banner">
+                Editing mesh · {tool === "vertex" ? "click a vertex, drag the gizmo" : "click a face, then Extrude in the inspector"} · <kbd>Esc</kbd> to exit
+              </div>
+            ) : null}
+            {selected && tool !== "vertex" && tool !== "face" ? (
+              <div className="quick-bar" aria-label="Selection quick actions">
+                <strong>{selected.name}</strong>
+                <span>{selected.dimensions.width.toFixed(2)} × {selected.dimensions.depth.toFixed(2)} × {selected.dimensions.height.toFixed(2)} m</span>
+                <button type="button" onClick={() => rotateSelected(-90)} title="Rotate −90°"><RotateCw size={13} style={{ transform: "scaleX(-1)" }} /></button>
+                <button type="button" onClick={() => rotateSelected(90)} title="Rotate +90° ( ] rotates 15°)"><RotateCw size={13} /></button>
+                <button type="button" onClick={() => setRightTab("properties")} title="Open properties"><SlidersHorizontal size={13} /></button>
+              </div>
+            ) : null}
+            {!selected ? <div className="viewport-hint">Drag to orbit · Right-drag to pan · Scroll to zoom · Right-click an object for actions</div> : null}
+            {contextMenu && contextItem ? (
+              <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()} role="menu">
+                <div className="context-title">{contextItem.name}</div>
+                <button type="button" role="menuitem" onClick={() => { duplicate(contextItem); useContextMenu.getState().close(); }}><Copy size={13} /> Duplicate <kbd>⌘D</kbd></button>
+                <button type="button" role="menuitem" onClick={() => { rotateSelected(90); useContextMenu.getState().close(); }}><RotateCw size={13} /> Rotate 90°</button>
+                <button type="button" role="menuitem" onClick={() => { requestFocus(); useContextMenu.getState().close(); }}><Crosshair size={13} /> Frame <kbd>F</kbd></button>
+                <button type="button" role="menuitem" onClick={() => {
+                  useWorkspaceStore.getState().dispatch({ type: "furniture.update", furnitureId: contextItem.id, patch: { constraints: { ...contextItem.constraints, locked: !contextItem.constraints?.locked } } });
+                  useContextMenu.getState().close();
+                }}>{contextItem.constraints?.locked ? <Unlock size={13} /> : <Lock size={13} />} {contextItem.constraints?.locked ? "Unlock" : "Lock"}</button>
+                <span className="menu-sep" />
+                <button type="button" role="menuitem" className="danger" onClick={() => { deleteSelected(); useContextMenu.getState().close(); }}><Trash2 size={13} /> Delete <kbd>Del</kbd></button>
+              </div>
+            ) : null}
           </div>
 
-          <div className="editor-statusbar">
-            <div className="statusbar-left">
-              <span><span className="statusbar-dot" /> Scene loaded</span>
-              <span className="statusbar-separator" />
-              <span>{starterScene.furniture.length} objects</span>
-              <span className="statusbar-separator" />
-              <span>{room.name}</span>
-            </div>
-            <div className="statusbar-right">
-              <span>Orbit controls ready</span>
-              <span className="statusbar-separator" />
-              <span>Phase 1 foundation</span>
-            </div>
-          </div>
+          <footer className="statusbar">
+            <span>{TOOLS.find((entry) => entry.id === tool)!.label} tool</span>
+            <span className="sep" />
+            <span>{selected ? selected.name : selectedRoom ? selectedRoom.name : "No selection"}</span>
+            <span className="sep" />
+            <span>{scene.furniture.length.toLocaleString()} objects</span>
+            <span className="sep" />
+            <button type="button" className={"status-validation status-validation--" + (errorCount ? "error" : warningCount ? "warning" : "ok")} onClick={() => setRightTab("issues")}>
+              <CircleAlert size={12} />
+              {validation ? (issues.length ? `${errorCount} errors · ${warningCount} warnings` : "Layout valid") : "Validating…"}
+              {validation ? <small>{validation.stats.durationMs.toFixed(1)} ms</small> : null}
+            </button>
+            <span className="statusbar-spacer" />
+            <span>{history.past.length} undo · {history.future.length} redo</span>
+            <span className="sep" />
+            <span>{connection === "online" ? `${peerCount} in session` : connection === "offline" ? "Offline (local)" : "Connecting…"}</span>
+          </footer>
         </section>
 
-        <aside className="right-panel" aria-label="Properties panel">
-          <div className="properties-header">
-            <div>
-              <span className="section-eyebrow">INSPECTOR</span>
-              <h1>Properties</h1>
-            </div>
-            <button className="tiny-icon-button" type="button" disabled title="Panel controls are not implemented yet" aria-label="Panel options">
-              <SlidersHorizontal size={15} />
+        <aside className="right-panel" aria-label="Inspector">
+          <div className="panel-tabs">
+            <button type="button" className={rightTab === "properties" ? "active" : ""} onClick={() => setRightTab("properties")}>Properties</button>
+            <button type="button" className={rightTab === "issues" ? "active" : ""} onClick={() => setRightTab("issues")}>
+              Issues {issues.length ? <span className={"tab-count tab-count--" + (errorCount ? "error" : "warning")}>{issues.length}</span> : null}
             </button>
+            <button type="button" className={rightTab === "rules" ? "active" : ""} onClick={() => setRightTab("rules")}>Rules</button>
           </div>
-
-          {selectedFurniture ? (
-            <FurnitureProperties item={selectedFurniture} />
-          ) : selectedEntityId === room.id ? (
-            <RoomProperties room={room} />
-          ) : (
-            <div className="empty-selection">
-              <div className="empty-selection-icon"><Box size={20} /></div>
-              <strong>Nothing selected</strong>
-              <span>Select an object in the scene or from the list.</span>
-            </div>
-          )}
-
-          <div className="properties-divider" />
-          <div className="inspector-section">
-            <div className="inspector-section-title">
-              <span>TRANSFORM</span>
-              <span className="read-only-pill">READ ONLY</span>
-            </div>
-            <p className="inspector-hint">Editing controls are planned for Phase 2.</p>
-          </div>
-
-          <div className="inspector-section spatial-card">
-            <div className="spatial-card-title">
-              <span className="spatial-icon"><Activity size={15} /></span>
-              <div><strong>Spatial checks</strong><span>Not available yet</span></div>
-            </div>
-            <p>The engine package is a scaffold. Room boundaries, collisions, clearances, and pathways are not validated yet.</p>
-            <div className="spatial-card-footer"><span /> VALIDATION · PHASE 2</div>
-          </div>
-
-          <div className="inspector-bottom-note">
-            <span className="note-mark">i</span>
-            <span>Sample scene data is loaded from a deterministic fixture. Changes are not saved.</span>
-          </div>
+          {rightTab === "properties" ? <Inspector /> : rightTab === "issues" ? <IssuesPanel /> : <RulesPanel />}
         </aside>
       </div>
+      <ConflictDialog />
+      <OfflineDialog />
+      <Notices />
     </main>
   );
 }
-
-function ObjectRow({
-  item,
-  selected,
-  onClick,
-}: {
-  item: FurnitureObject;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={"object-row" + (selected ? " object-row--selected" : "")}
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-    >
-      <span className={"object-swatch swatch--" + item.category} />
-      <span className="object-row-copy">
-        <strong>{item.name}</strong>
-        <span>{item.category}</span>
-      </span>
-      {selected ? <span className="selected-indicator" /> : <ChevronRight size={14} className="row-chevron" />}
-    </button>
-  );
-}
-
-function FurnitureProperties({ item }: { item: FurnitureObject }) {
-  return (
-    <>
-      <div className="selected-entity-card">
-        <span className={"large-swatch swatch--" + item.category} />
-        <div className="selected-entity-copy">
-          <strong>{item.name}</strong>
-          <span>{item.category} · sample item</span>
-        </div>
-        <button className="tiny-icon-button" type="button" disabled title="Visibility controls are planned for a later phase" aria-label="Visibility">
-          <Eye size={15} />
-        </button>
-      </div>
-      <div className="inspector-section">
-        <div className="inspector-section-title"><span>DIMENSIONS</span><span className="unit-caption">m</span></div>
-        <div className="property-grid">
-          <PropertyValue label="Width" value={formatMeters(item.dimensions.width)} />
-          <PropertyValue label="Depth" value={formatMeters(item.dimensions.depth)} />
-          <PropertyValue label="Height" value={formatMeters(item.dimensions.height)} />
-          <PropertyValue label="Yaw" value={item.yawDegrees.toFixed(1) + "°"} />
-        </div>
-      </div>
-      <div className="inspector-section">
-        <div className="inspector-section-title"><span>POSITION</span><span className="unit-caption">m</span></div>
-        <div className="property-grid">
-          <PropertyValue label="X" value={formatMeters(item.position.x)} />
-          <PropertyValue label="Y" value={formatMeters(item.position.y)} />
-          <PropertyValue label="Z" value={formatMeters(item.position.z)} />
-        </div>
-      </div>
-    </>
-  );
-}
-
-function RoomProperties({ room }: { room: (typeof starterScene.rooms)[number] }) {
-  return (
-    <>
-      <div className="selected-entity-card">
-        <span className="large-swatch swatch--room"><Layers size={16} /></span>
-        <div className="selected-entity-copy">
-          <strong>{room.name}</strong>
-          <span>room · sample scene</span>
-        </div>
-        <button className="tiny-icon-button" type="button" disabled title="Visibility controls are planned for a later phase" aria-label="Visibility">
-          <Eye size={15} />
-        </button>
-      </div>
-      <div className="inspector-section">
-        <div className="inspector-section-title"><span>ROOM SIZE</span><span className="unit-caption">m</span></div>
-        <div className="property-grid">
-          <PropertyValue label="Width" value={formatMeters(room.dimensions.width)} />
-          <PropertyValue label="Depth" value={formatMeters(room.dimensions.depth)} />
-          <PropertyValue label="Height" value={formatMeters(room.dimensions.height)} />
-          <PropertyValue label="Wall" value={formatMeters(room.dimensions.wallThickness)} />
-        </div>
-      </div>
-    </>
-  );
-}
-
-export default App;

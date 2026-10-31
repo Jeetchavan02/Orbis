@@ -1,0 +1,323 @@
+{
+  "schemaVersion": 1,
+  "id": "scene-bedroom-001",
+  "name": "Sunlit bedroom",
+  "coordinateSystem": "y-up-xz-meters",
+  "rooms": [
+    {
+      "id": "room-bedroom",
+      "name": "Bedroom",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "dimensions": {
+        "width": 4.6,
+        "depth": 4.2,
+        "height": 2.7,
+        "wallThickness": 0.14
+      },
+      "yawDegrees": 0,
+      "floorColor": "#c8ab86",
+      "wallColor": "#f1eee8",
+      "openings": [
+        {
+          "id": "door-main",
+          "kind": "door",
+          "wall": "south",
+          "offset": 1.5,
+          "width": 0.8,
+          "height": 2.05,
+          "sillHeight": 0
+        },
+        {
+          "id": "window-north",
+          "kind": "window",
+          "wall": "north",
+          "offset": -1.6,
+          "width": 1.0,
+          "height": 1.3,
+          "sillHeight": 0.9
+        },
+        {
+          "id": "window-east",
+          "kind": "window",
+          "wall": "east",
+          "offset": -0.9,
+          "width": 1.2,
+          "height": 1.3,
+          "sillHeight": 0.9
+        }
+      ]
+    }
+  ],
+  "furniture": [
+    {
+      "id": "obj-rug",
+      "roomId": "room-bedroom",
+      "name": "Wool rug",
+      "category": "decor",
+      "catalogItemId": "rug",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0.4
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 2.0,
+        "depth": 1.4,
+        "height": 0.015
+      },
+      "color": "#d9d1c3",
+      "constraints": {
+        "floorCovering": true
+      }
+    },
+    {
+      "id": "obj-bed",
+      "roomId": "room-bedroom",
+      "name": "Queen bed",
+      "category": "beds",
+      "catalogItemId": "bed-queen",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": -1.05
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 1.6,
+        "depth": 2.1,
+        "height": 1.0
+      },
+      "color": "#d4d9df"
+    },
+    {
+      "id": "obj-nightstand-left",
+      "roomId": "room-bedroom",
+      "name": "Nightstand (left)",
+      "category": "storage",
+      "catalogItemId": "nightstand",
+      "position": {
+        "x": -1.1,
+        "y": 0,
+        "z": -1.9
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.5,
+        "depth": 0.4,
+        "height": 0.55
+      },
+      "color": "#9b7a5f",
+      "constraints": {
+        "frontClearance": 0.4
+      }
+    },
+    {
+      "id": "obj-nightstand-right",
+      "roomId": "room-bedroom",
+      "name": "Nightstand (right)",
+      "category": "storage",
+      "catalogItemId": "nightstand",
+      "position": {
+        "x": 1.1,
+        "y": 0,
+        "z": -1.9
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.5,
+        "depth": 0.4,
+        "height": 0.55
+      },
+      "color": "#9b7a5f",
+      "constraints": {
+        "frontClearance": 0.4
+      }
+    },
+    {
+      "id": "obj-wardrobe",
+      "roomId": "room-bedroom",
+      "name": "Wardrobe",
+      "category": "storage",
+      "catalogItemId": "wardrobe",
+      "position": {
+        "x": -2.0,
+        "y": 0,
+        "z": 0.7
+      },
+      "yawDegrees": 90,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.6,
+        "height": 2.1
+      },
+      "color": "#b9c1b9"
+    },
+    {
+      "id": "obj-dresser",
+      "roomId": "room-bedroom",
+      "name": "Dresser",
+      "category": "storage",
+      "catalogItemId": "dresser",
+      "position": {
+        "x": 2.075,
+        "y": 0,
+        "z": 0.4
+      },
+      "yawDegrees": 270,
+      "dimensions": {
+        "width": 1.0,
+        "depth": 0.45,
+        "height": 0.8
+      },
+      "color": "#9b7a5f"
+    },
+    {
+      "id": "obj-desk",
+      "roomId": "room-bedroom",
+      "name": "Writing desk",
+      "category": "tables",
+      "catalogItemId": "desk",
+      "position": {
+        "x": -0.4,
+        "y": 0,
+        "z": 1.8
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 1.2,
+        "depth": 0.6,
+        "height": 0.75
+      },
+      "color": "#a07c60"
+    },
+    {
+      "id": "obj-desk-chair",
+      "roomId": "room-bedroom",
+      "name": "Desk chair",
+      "category": "seating",
+      "catalogItemId": "desk-chair",
+      "position": {
+        "x": -0.4,
+        "y": 0,
+        "z": 1.2
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.5,
+        "depth": 0.5,
+        "height": 0.9
+      },
+      "color": "#5f6f68",
+      "constraints": {
+        "frontClearance": 0
+      }
+    },
+    {
+      "id": "obj-desk-lamp",
+      "roomId": "room-bedroom",
+      "name": "Desk lamp",
+      "category": "lighting",
+      "catalogItemId": "desk-lamp",
+      "position": {
+        "x": -0.85,
+        "y": 0.75,
+        "z": 1.85
+      },
+      "yawDegrees": 180,
+      "dimensions": {
+        "width": 0.18,
+        "depth": 0.18,
+        "height": 0.42
+      },
+      "color": "#2f3532",
+      "light": {
+        "kind": "spot",
+        "on": true,
+        "intensity": 6,
+        "color": "#ffd9a8",
+        "height": 0.4
+      }
+    },
+    {
+      "id": "obj-floor-lamp",
+      "roomId": "room-bedroom",
+      "name": "Floor lamp",
+      "category": "lighting",
+      "catalogItemId": "floor-lamp",
+      "position": {
+        "x": 0.6,
+        "y": 0,
+        "z": 1.85
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.35,
+        "depth": 0.35,
+        "height": 1.6
+      },
+      "color": "#d8c79a",
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 8,
+        "color": "#ffcf91",
+        "height": 1.5
+      }
+    },
+    {
+      "id": "obj-plant",
+      "roomId": "room-bedroom",
+      "name": "Fiddle-leaf plant",
+      "category": "decor",
+      "catalogItemId": "plant",
+      "position": {
+        "x": 2.0,
+        "y": 0,
+        "z": -1.8
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.45,
+        "depth": 0.45,
+        "height": 1.2
+      },
+      "color": "#6f9a74"
+    },
+    {
+      "id": "obj-ceiling-light",
+      "roomId": "room-bedroom",
+      "name": "Ceiling light",
+      "category": "lighting",
+      "catalogItemId": "ceiling-light",
+      "position": {
+        "x": 0,
+        "y": 2.6,
+        "z": 0
+      },
+      "yawDegrees": 0,
+      "dimensions": {
+        "width": 0.5,
+        "depth": 0.5,
+        "height": 0.1
+      },
+      "color": "#f4f1ea",
+      "light": {
+        "kind": "point",
+        "on": true,
+        "intensity": 14,
+        "color": "#fff1dc",
+        "height": 0
+      }
+    }
+  ],
+  "environment": {
+    "mode": "day",
+    "artificialLightScale": 1,
+    "shadows": true
+  }
+}
