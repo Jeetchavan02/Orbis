@@ -1,9 +1,11 @@
 import { useMemo, useRef, useState } from "react";
-import { ChevronRight, DoorOpen, LayoutGrid, Layers, Lightbulb, Lock, Paintbrush, Plus, Search } from "lucide-react";
+import { ArrowDownToLine, ImageUp, ArrowUpToLine, ChevronRight, CopyPlus, DoorOpen, LayoutGrid, Layers, Lightbulb, Lock, Paintbrush, Plus, Search } from "lucide-react";
 import { boundsDimensions, meshBounds } from "@reality-builder/shared";
 import { catalogById, type GroupId } from "../../data/catalog";
 import { importModelFile } from "../../lib/glb";
 import { activeRoom, placeEntry } from "../../lib/placement";
+import { insertFloor } from "../../lib/floors";
+import { usePhotoDialog } from "../../lib/ui";
 import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { Library, ObjectThumb } from "./Library";
 
@@ -76,7 +78,14 @@ export function LeftPanel() {
       </button>
     </nav>
     <aside className="left-panel" aria-label="Scene and library">
-      <div className="left-panel-head">{RAIL.find((entry) => entry.id === tab)!.title}</div>
+      <div className="left-panel-head">
+        <span>{RAIL.find((entry) => entry.id === tab)!.title}</span>
+        {tab !== "scene" ? (
+          <button type="button" className="head-upload" onClick={() => usePhotoDialog.getState().setOpen(true)} title="Upload a photo: the background is removed and it becomes a 3D object in the room">
+            <ImageUp size={14} /> Upload photo
+          </button>
+        ) : null}
+      </div>
 
       {tab === "scene" ? (
         <>
@@ -92,6 +101,15 @@ export function LeftPanel() {
                 <span className="tree-copy"><strong>{room.name}</strong><span>{room.dimensions.width.toFixed(1)} × {room.dimensions.depth.toFixed(1)} m · {room.openings.length} openings</span></span>
               </button>
             ))}
+            <div className="floor-actions" aria-label="Floors">
+              <span className="floor-actions-label">Floors · acts on {scene.rooms.find((room) => room.id === activeRoomId)?.name ?? "the active floor"}</span>
+              <div className="floor-actions-grid">
+                <button type="button" onClick={() => insertFloor(activeRoomId, "above", false)} title="Add an empty floor with the same footprint above"><ArrowUpToLine size={13} /> Add above</button>
+                <button type="button" onClick={() => insertFloor(activeRoomId, "below", false)} title="Add an empty floor below (floors above move up)"><ArrowDownToLine size={13} /> Add below</button>
+                <button type="button" onClick={() => insertFloor(activeRoomId, "above", true)} title="Copy this floor with its furniture, doors and windows, above it"><CopyPlus size={13} /> Duplicate above</button>
+                <button type="button" onClick={() => insertFloor(activeRoomId, "below", true)} title="Copy this floor with its furniture, doors and windows, below it"><CopyPlus size={13} /> Duplicate below</button>
+              </div>
+            </div>
             <div className="list-heading">
               Objects <span className="count">{floorItems.length}</span>
               <button type="button" className="tiny-icon" title="Add from library" aria-label="Add from library" onClick={() => setTab("library")}><Plus size={14} /></button>

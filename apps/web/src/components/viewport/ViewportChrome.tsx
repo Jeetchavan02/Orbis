@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { Camera, Crosshair, Expand, Footprints, Grid3X3, Hand, Maximize2, MousePointer2, Move3D, RectangleHorizontal, Rotate3D, Rotate3d, Waypoints } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Camera, Check, Eye, Pencil, ChevronDown, Crosshair, Expand, Footprints, Grid3X3, Hand, Maximize2, MousePointer2, Move3D, RectangleHorizontal, Rotate3D, Rotate3d, Waypoints } from "lucide-react";
 import { viewportBridge } from "../../lib/perf";
 import { useWorkspaceStore, type TransformTool, type ViewMode } from "../../store/workspace";
 
-const CAMERAS: { id: ViewMode; label: string }[] = [
+export const CAMERAS: { id: ViewMode; label: string }[] = [
   { id: "perspective", label: "Perspective" },
   { id: "top", label: "Top" },
   { id: "front", label: "Front" },
@@ -59,12 +59,8 @@ export function ViewportChrome({ container }: { container: React.RefObject<HTMLD
 
   return (
     <>
-      <label className="vp-camera" title="Camera view (1 plan · 2 top · 3 perspective)">
-        <Camera size={14} />
-        <select aria-label="Camera view" value={viewMode} onChange={(event) => setViewMode(event.target.value as ViewMode)}>
-          {CAMERAS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-        </select>
-      </label>
+      <CameraMenu viewMode={viewMode} onPick={setViewMode} />
+      {viewMode === "walk" ? <WalkBar /> : null}
 
       <div className="vp-pill" role="toolbar" aria-label="Transform tools">
         {TOOLS.filter((entry) => !entry.mesh || selected?.mesh).map((entry) => (
@@ -78,7 +74,7 @@ export function ViewportChrome({ container }: { container: React.RefObject<HTMLD
         <button type="button" className={showRoutes ? "active" : ""} aria-pressed={showRoutes} onClick={() => setShowRoutes(!showRoutes)} title="Show walking routes from the door"><Footprints size={16} /></button>
       </div>
 
-      {threeD ? (
+      {threeD && viewMode !== "walk" ? (
         <label className="vp-grid" title="Grid spacing">
           <Grid3X3 size={13} />
           <select aria-label="Grid spacing" value={gridSize} onChange={(event) => setGrid({ gridSize: Number(event.target.value) })}>
@@ -100,5 +96,60 @@ export function ViewportChrome({ container }: { container: React.RefObject<HTMLD
         <button type="button" className={fullscreen ? "active" : ""} onClick={toggleFullscreen} title="Fullscreen"><Maximize2 size={16} /></button>
       </div>
     </>
+  );
+}
+
+function WalkBar() {
+  const walkMode = useWorkspaceStore((state) => state.walkMode);
+  const { setWalkMode } = useWorkspaceStore.getState();
+  return (
+    <div className="vp-walk" role="group" aria-label="Walkthrough mode">
+      <div className="segmented">
+        <button type="button" className={walkMode === "view" ? "active" : ""} aria-pressed={walkMode === "view"} onClick={() => setWalkMode("view")} title="Eye-level tour inside the room; objects can't be moved"><Eye size={14} /> View</button>
+        <button type="button" className={walkMode === "roam" ? "active" : ""} aria-pressed={walkMode === "roam"} onClick={() => setWalkMode("roam")} title="Fly anywhere and edit objects"><Pencil size={14} /> Free roam &amp; edit</button>
+      </div>
+      <span className="vp-walk-keys">
+        {walkMode === "view"
+          ? <><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · drag to look</>
+          : <><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>E</kbd>/<kbd>Q</kbd> up/down · <kbd>Shift</kbd> fast · right-drag to look · click objects to edit</>}
+      </span>
+    </div>
+  );
+}
+
+function CameraMenu({ viewMode, onPick }: { viewMode: ViewMode; onPick: (mode: ViewMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const current = CAMERAS.find((entry) => entry.id === viewMode) ?? CAMERAS[0]!;
+  return (
+    <div className="vp-camera" ref={ref}>
+      <button type="button" className="vp-camera-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} title="Camera view">
+        <Camera size={14} /> <strong>{current.label}</strong> <ChevronDown size={14} />
+      </button>
+      {open ? (
+        <div className="vp-camera-menu" role="menu" aria-label="Camera view">
+          {CAMERAS.map((entry, index) => (
+            <button key={entry.id} type="button" role="menuitemradio" aria-checked={entry.id === viewMode} className={entry.id === viewMode ? "active" : ""} onClick={() => { onPick(entry.id); setOpen(false); }}>
+              <span className="vp-check">{entry.id === viewMode ? <Check size={14} /> : null}</span>
+              <span className="vp-label">{entry.label}</span>
+              <kbd>{index + 1}</kbd>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }

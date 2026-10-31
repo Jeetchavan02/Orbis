@@ -29,9 +29,10 @@ import { dragging, LIBRARY_DRAG_TYPE } from "./components/panels/Library";
 import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
 import { ConflictDialog, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
+import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
 import { RulesPanel } from "./components/panels/RulesPanel";
 import { TopBar } from "./components/panels/TopBar";
-import { TOOLS, ViewportChrome } from "./components/viewport/ViewportChrome";
+import { CAMERAS, TOOLS, ViewportChrome } from "./components/viewport/ViewportChrome";
 import { usePerfStore } from "./lib/perf";
 import { useContextMenu } from "./lib/ui";
 import { useWorkspaceStore } from "./store/workspace";
@@ -111,11 +112,11 @@ export default function App() {
         else state.requestCameraReset();
       } else if (!mod && key === "h") {
         state.requestCameraReset();
-      } else if (!mod && (key === "1" || key === "2" || key === "3")) {
-        state.setViewMode(key === "1" ? "plan" : key === "2" ? "top" : "perspective");
+      } else if (!mod && /^[1-7]$/.test(key)) {
+        state.setViewMode(CAMERAS[Number(key) - 1]!.id);
       } else if (!mod && key === "p") {
         state.setShowPerf(!state.showPerf);
-      } else if (key.startsWith("arrow") && state.selectedEntityId) {
+      } else if (key.startsWith("arrow") && state.selectedEntityId && state.viewMode !== "walk") {
         const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
         if (!item || item.constraints?.locked) return;
         event.preventDefault();
@@ -127,7 +128,7 @@ export default function App() {
         rotateSelected(-15);
       } else if (!mod && key === "]") {
         rotateSelected(15);
-      } else if (!mod) {
+      } else if (!mod && state.viewMode !== "walk") {
         const match = TOOLS.find((entry) => entry.key.toLowerCase() === key);
         if (!match) return;
         const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
@@ -202,7 +203,6 @@ export default function App() {
                 <button type="button" onClick={() => setRightTab("properties")} title="Open properties"><SlidersHorizontal size={13} /></button>
               </div>
             ) : null}
-            {!selected ? <div className="viewport-hint">{viewMode !== "perspective" && viewMode !== "walk" ? "Drag furniture to move it · drag empty space to pan · scroll to zoom · press 3 for 3D" : "Drag furniture to move it · drag empty space to orbit · right-drag to pan · scroll to zoom · press 2 for plan"}</div> : null}
             {contextMenu && contextItem ? (
               <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()} role="menu">
                 <div className="context-title">{contextItem.name}</div>
@@ -259,6 +259,7 @@ export default function App() {
       </div>
       <ConflictDialog />
       <ShareDialog />
+      <PhotoTo3DDialog />
       <OfflineDialog />
       <Notices />
     </main>

@@ -20,12 +20,14 @@ child.once("error", () => {
   process.exit(1);
 });
 let url = null;
+let printed = false;
 const onData = async (chunk) => {
   const text = chunk.toString();
   url ??= text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? null;
-  if (url && text.includes("Registered tunnel connection")) {
+  if (url && text.includes("Registered tunnel connection") && !printed) {
+    printed = true;
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const status = await fetch(url + "/api/projects").then((response) => response.status).catch(() => "unreachable");
+    const status = await fetch(url + "/api/health").then((response) => response.status).catch(() => "unreachable");
     console.log(`\n  Share this link:  ${url}\n  Self-check: API ${status}${status === 200 ? " — working" : " — new links can take ~30 s to resolve, try again shortly"}\n  Keep this terminal open. Ctrl+C stops sharing.\n`);
   }
 };

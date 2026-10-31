@@ -1,0 +1,14 @@
+{
+  "name": "bnb-final-test",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix apps",
+    "dev:share": "npm run dev:share --prefix apps",
+    "tunnel": "npm run tunnel --prefix apps",
+    "build": "npm run build --prefix apps",
+    "test": "npm run test --prefix apps",
+    "typecheck": "npm run typecheck --prefix apps"
+  }
+}
+

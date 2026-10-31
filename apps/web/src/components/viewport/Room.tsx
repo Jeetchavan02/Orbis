@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Text } from "@react-three/drei";
+import { Line, Text } from "@react-three/drei";
 import { CanvasTexture, MathUtils, RepeatWrapping, SRGBColorSpace, Vector3, type Group } from "three";
 import type { Opening, Room, WallSide } from "@reality-builder/shared";
 
@@ -158,12 +158,8 @@ export const RoomShell = memo(function RoomShell({ room, cutaway, showDimensions
       ))}
       {showDimensions ? (
         <>
-          <Text position={[0, 0.02, depth / 2 + t + 0.35]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.16} color="#5a6660" anchorX="center">
-            {width.toFixed(2)} m
-          </Text>
-          <Text position={[width / 2 + t + 0.35, 0.02, 0]} rotation={[-Math.PI / 2, 0, Math.PI / 2]} fontSize={0.16} color="#5a6660" anchorX="center">
-            {depth.toFixed(2)} m
-          </Text>
+          <DimensionLine length={width + 2 * t} label={`${width.toFixed(2)} m`} position={[0, 0.02, depth / 2 + t + 0.4]} yaw={0} />
+          <DimensionLine length={depth + 2 * t} label={`${depth.toFixed(2)} m`} position={[width / 2 + t + 0.4, 0.02, 0]} yaw={Math.PI / 2} />
         </>
       ) : null}
     </group>
@@ -204,4 +200,34 @@ function woodGrain(width: number, depth: number) {
   texture.anisotropy = 4;
   grainCache.set(key, texture);
   return texture;
+}
+
+const DIM_INK = "#5a6660";
+
+/**
+ * Architectural dimension on the floor plane: |◄── label ──►| with end ticks, arrowheads,
+ * and a gap in the line around the label. Drawn along local X, then rotated by `yaw`.
+ */
+function DimensionLine({ length, label, position, yaw }: { length: number; label: string; position: [number, number, number]; yaw: number }) {
+  const half = length / 2;
+  const tick = 0.14;
+  const arrow = 0.12;
+  const gap = Math.min(half - arrow - 0.05, label.length * 0.05 + 0.12);
+  return (
+    <group position={position} rotation={[0, -yaw, 0]}>
+      <Line points={[[-half, 0, 0], [-gap, 0, 0]]} color={DIM_INK} lineWidth={1.4} />
+      <Line points={[[gap, 0, 0], [half, 0, 0]]} color={DIM_INK} lineWidth={1.4} />
+      <Line points={[[-half, 0, -tick], [-half, 0, tick]]} color={DIM_INK} lineWidth={1.4} />
+      <Line points={[[half, 0, -tick], [half, 0, tick]]} color={DIM_INK} lineWidth={1.4} />
+      {[-1, 1].map((side) => (
+        <mesh key={side} position={[side * (half - arrow / 2), 0, 0]} rotation={[-Math.PI / 2, 0, side > 0 ? -Math.PI / 2 : Math.PI / 2]}>
+          <coneGeometry args={[arrow * 0.32, arrow, 3]} />
+          <meshBasicMaterial color={DIM_INK} />
+        </mesh>
+      ))}
+      <Text position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.16} color={DIM_INK} anchorX="center" anchorY="middle">
+        {label}
+      </Text>
+    </group>
+  );
 }

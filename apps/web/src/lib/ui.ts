@@ -8,3 +8,4 @@ export const useContextMenu = create<{ menu: { x: number; y: number; id: string 
 }));
 
 export const useShareDialog = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({ open: false, setOpen: (open) => set({ open }) }));
+export const usePhotoDialog = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({ open: false, setOpen: (open) => set({ open }) }));

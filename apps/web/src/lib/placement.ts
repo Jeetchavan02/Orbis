@@ -86,7 +86,7 @@ export function itemFromEntry(entry: CatalogItem, room: Room, x: number, z: numb
 }
 
 /** Free spot near the room centre (used for click-to-add without pointing). */
-function freeSpot(entry: CatalogItem, room: Room, scene: Scene) {
+export function freeSpot(entry: CatalogItem, room: Room, scene: Scene) {
   for (let ring = 0; ring < 30; ring += 1) {
     const steps = Math.max(1, ring * 8);
     for (let step = 0; step < steps; step += 1) {

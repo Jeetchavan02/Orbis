@@ -201,6 +201,28 @@ app.put("/api/projects/:id/thumbnail", async (request, response) => {
   response.json({ ok: true });
 });
 
+// Photo cutouts (transparent PNGs) used by "Photo → 3D" objects.
+const ASSET_DIR = resolve(here, "../data/assets");
+const ASSET_ID = /^[a-z0-9-]{8,64}$/;
+app.post("/api/assets", async (request, response) => {
+  const dataUrl = String((request.body as { dataUrl?: string })?.dataUrl ?? "");
+  const match = /^data:image\/png;base64,(.+)$/.exec(dataUrl);
+  if (!match) return response.status(400).json({ error: "Expected a PNG data URL." });
+  const bytes = Buffer.from(match[1]!, "base64");
+  if (bytes.length > 8 * 1024 * 1024) return response.status(413).json({ error: "Image is larger than 8 MB." });
+  const id = "cutout-" + randomUUID().slice(0, 12);
+  await mkdir(ASSET_DIR, { recursive: true });
+  await writeFile(resolve(ASSET_DIR, id + ".png"), bytes);
+  response.json({ id, url: `/api/assets/${id}.png` });
+});
+app.get("/api/assets/:file", (request, response) => {
+  const id = request.params.file.replace(/\.png$/, "");
+  const path = resolve(ASSET_DIR, id + ".png");
+  if (!ASSET_ID.test(id) || !existsSync(path)) return response.status(404).end();
+  response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  response.sendFile(path);
+});
+
 app.get("/api/projects/:id/thumbnail", (request, response) => {
   const id = request.params.id;
   if (!SCENE_ID_PATTERN.test(id) || !existsSync(thumbPath(id))) return response.status(404).end();

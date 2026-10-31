@@ -94,6 +94,9 @@ type WorkspaceStore = {
   setActiveRoom: (roomId: string) => void;
   setTool: (tool: TransformTool) => void;
   setViewMode: (viewMode: ViewMode) => void;
+  /** Walkthrough flavour: "view" = eye-level tour, read-only; "roam" = free flight with editing. */
+  walkMode: "view" | "roam";
+  setWalkMode: (walkMode: "view" | "roam") => void;
   setPanMode: (panMode: boolean) => void;
   setGrid: (patch: { showGrid?: boolean; gridSize?: number }) => void;
   /** Change this collaborator's display name/colour (broadcast to everyone). */
@@ -399,6 +402,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     activeRoomId: (restoredOfflineWork?.scene ?? starterScene).rooms[0]?.id ?? "",
     tool: "select",
     viewMode: "perspective",
+    walkMode: "view",
     panMode: false,
     showGrid: true,
     gridSize: 0.25,
@@ -545,6 +549,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         pendingCursor = undefined;
       }, 80);
     },
+    setWalkMode: (walkMode) => set({ walkMode }),
     setViewMode: (viewMode) => set((state) => ({ viewMode, resetCameraSignal: state.resetCameraSignal + 1, tool: state.tool === "vertex" || state.tool === "face" ? "select" : state.tool })),
     setPanMode: (panMode) => set({ panMode }),
     setGrid: (patch) => set((state) => ({ showGrid: patch.showGrid ?? state.showGrid, gridSize: patch.gridSize ?? state.gridSize })),

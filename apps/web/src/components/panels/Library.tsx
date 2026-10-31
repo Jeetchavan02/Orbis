@@ -1,6 +1,7 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import * as Icons from "lucide-react";
-import { FileUp, Heart, Loader2, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, FileUp, Heart, Loader2, Plus, Search, Wand2 } from "lucide-react";
+import { usePhotoDialog } from "../../lib/ui";
 import { create } from "zustand";
 import { catalog, GROUPS, ROOM_TYPES, type CatalogItem, type GroupId, type RoomType } from "../../data/catalog";
 import { placeEntry, usePlacement } from "../../lib/placement";
@@ -40,6 +41,38 @@ export const useFavourites = create<{ ids: string[]; toggle: (id: string) => voi
 }));
 
 const QUICK_ROOMS: { id: RoomType | "all"; label: string }[] = [{ id: "all", label: "All" }, { id: "bedroom", label: "Bedroom" }, { id: "living", label: "Living" }, { id: "dining", label: "Dining" }];
+
+/** "More" pill: the room types not shown as quick pills, in a small popover. Shows the picked room when active. */
+function MoreRooms({ room, onPick }: { room: RoomType | "all"; onPick: (room: RoomType) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [open]);
+  const others = ROOM_TYPES.filter((entry) => !QUICK_ROOMS.some((quick) => quick.id === entry.id));
+  const picked = others.find((entry) => entry.id === room);
+  return (
+    <div className="lib-more" ref={ref}>
+      <button type="button" className={picked ? "active" : ""} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {picked ? picked.label : "More"} <ChevronDown size={13} />
+      </button>
+      {open ? (
+        <div className="lib-more-menu" role="menu">
+          {others.map((entry) => (
+            <button key={entry.id} type="button" role="menuitemradio" aria-checked={entry.id === room} className={entry.id === room ? "active" : ""} onClick={() => { onPick(entry.id); setOpen(false); }}>
+              <span>{entry.label}</span>{entry.id === room ? <Check size={13} /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: boolean }) {
   const [element, setElement] = useState<HTMLButtonElement | null>(null);
@@ -129,10 +162,7 @@ export function Library({ onImport, importing, initialGroup = "all" }: { onImpor
         {QUICK_ROOMS.map((entry) => (
           <button key={entry.id} type="button" role="radio" aria-checked={room === entry.id} className={room === entry.id ? "active" : ""} onClick={() => { setRoom(entry.id); setGroup("all"); setLimit(PAGE); }}>{entry.label}</button>
         ))}
-        <select aria-label="More room types" className={QUICK_ROOMS.some((entry) => entry.id === room) ? "" : "active"} value={QUICK_ROOMS.some((entry) => entry.id === room) ? "" : room} onChange={(event) => { if (event.target.value) { setRoom(event.target.value as RoomType); setGroup("all"); setLimit(PAGE); } }}>
-          <option value="">More…</option>
-          {ROOM_TYPES.filter((entry) => !QUICK_ROOMS.some((quick) => quick.id === entry.id)).map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-        </select>
+        <MoreRooms room={room} onPick={(id) => { setRoom(id); setGroup("all"); setLimit(PAGE); }} />
       </div>
       <div className="lib-categories" role="tablist" aria-label="Categories">
         <button type="button" role="tab" aria-selected={group === "all"} className={group === "all" ? "active" : ""} onClick={() => setGroup("all")}><span>All items</span><small>{inRoom.length}</small></button>
@@ -153,6 +183,10 @@ export function Library({ onImport, importing, initialGroup = "all" }: { onImpor
         </div>
         {visible.length === 0 ? <p className="field-note pad">{group === "favourites" && !needle ? "No favourites yet — tap the heart on any item." : `Nothing matches “${query}”.`}</p> : null}
         {limit < visible.length ? <button type="button" className="ghost-button lib-more" onClick={() => setLimit(limit + PAGE)}><Plus size={13} /> Show more ({visible.length - limit})</button> : null}
+        <button type="button" className="import-card import-card--photo" onClick={() => usePhotoDialog.getState().setOpen(true)}>
+          <Wand2 size={16} />
+          <span><strong>Photo → 3D</strong><span>Remove the background and place the cutout in the room</span></span>
+        </button>
         <button type="button" className="import-card" onClick={onImport} disabled={importing}>
           {importing ? <Loader2 size={16} className="spin" /> : <FileUp size={16} />}
           <span><strong>{importing ? "Importing model…" : "Import GLB / GLTF"}</strong><span>Becomes an editable, collidable mesh</span></span>

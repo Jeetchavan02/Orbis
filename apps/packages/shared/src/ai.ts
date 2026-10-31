@@ -75,6 +75,13 @@ export const AiEditResponseSchema = z.object({
 /** Structured room extraction from a photo (approximate). */
 export const AiRoomExtractionSchema = z.object({
   roomName: z.string().default("Reconstructed room"),
+  source: z.enum(["photo", "sketch", "floor-plan"]).default("photo"),
+  // Dimension labels written on the image, transcribed verbatim and converted to meters.
+  measurements: z.array(z.object({
+    label: z.string(),
+    meters: z.number().positive(),
+    axis: z.enum(["width", "depth", "other"]),
+  })).max(20).default([]),
   width: z.number().min(1.5).max(20),
   depth: z.number().min(1.5).max(20),
   height: z.number().min(2).max(5).default(2.7),

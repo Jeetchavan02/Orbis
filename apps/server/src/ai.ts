@@ -348,14 +348,18 @@ export async function runAiEdit(request: AiEditRequest, newId: () => string): Pr
   };
 }
 
-const IMAGE_SYSTEM = `You reconstruct an approximate furnished room from one photo for a 3D editor.
+const IMAGE_SYSTEM = `You reconstruct a room for a 3D editor from one image: a photo, a hand-drawn sketch, or a floor plan.
 Respond with JSON only:
-{"roomName":string,"width":number,"depth":number,"height":number,"floorColor":"#rrggbb","wallColor":"#rrggbb",
+{"roomName":string,"source":"photo"|"sketch"|"floor-plan",
+ "measurements":[{"label":string,"meters":number,"axis":"width"|"depth"|"other"}],
+ "width":number,"depth":number,"height":number,"floorColor":"#rrggbb","wallColor":"#rrggbb",
  "openings":[{"kind":"door"|"window","wall":"north"|"south"|"east"|"west","offset":number,"width":number}],
  "objects":[{"catalogItemId":string,"name":string,"x":number,"z":number,"yawDegrees":number,"color":"#rrggbb"}],
  "notes":string}
 Coordinates in meters, room centered at x=0,z=0; north wall is -Z, the camera is roughly at the south (+Z) side looking north.
 width is along X, depth along Z. yawDegrees 0 = object front faces +Z (toward camera), 180 faces -Z.
+MEASUREMENTS ARE AUTHORITATIVE. First read every dimension written on the image (e.g. "15m", "7 m", "4.2", "12'6\"", "3600 mm") and list each one in measurements: label = the text exactly as written, meters = its value in meters, axis = "width" if its dimension line runs left-right (horizontal, along X), "depth" if it runs up-down (vertical, along Z), else "other". The room width/depth MUST equal the written values for those sides; never replace them with typical sizes. Only estimate a side when nothing is written for it.
+For a sketch or floor plan, include only furniture, doors and windows that are actually drawn or labelled; an empty outline means an empty room (objects: []). Do not invent furniture.
 Only use catalogItemIds from the provided catalog; map each visible piece to the closest one. Estimate realistic sizes from typical furniture dimensions. Put objects against walls where they appear to be. In notes, state what was uncertain.`;
 
 export async function runImageToRoom(request: AiImageRequest, newId: () => string): Promise<AiImageResponse> {
@@ -368,6 +372,18 @@ export async function runImageToRoom(request: AiImageRequest, newId: () => strin
     ],
   }]);
   const extraction = AiRoomExtractionSchema.parse(JSON.parse(text));
+  // Written dimensions win over the model's own estimate; scale its object positions to match.
+  const written = (axis: "width" | "depth") => extraction.measurements.filter((entry) => entry.axis === axis && entry.meters >= 1.5 && entry.meters <= 20).sort((a, b) => b.meters - a.meters)[0];
+  const corrections: string[] = [];
+  for (const axis of ["width", "depth"] as const) {
+    const measured = written(axis);
+    if (!measured || Math.abs(measured.meters - extraction[axis]) < 0.01) continue;
+    const scale = measured.meters / extraction[axis];
+    for (const object of extraction.objects) object[axis === "width" ? "x" : "z"] *= scale;
+    for (const opening of extraction.openings) if ((axis === "width") === (opening.wall === "north" || opening.wall === "south")) opening.offset *= scale;
+    corrections.push(`${axis} set to the written ${measured.label} (model estimated ${extraction[axis].toFixed(2)} m)`);
+    extraction[axis] = measured.meters;
+  }
   const roomId = newId();
   const halfW = extraction.width / 2;
   const halfD = extraction.depth / 2;
@@ -409,6 +425,7 @@ export async function runImageToRoom(request: AiImageRequest, newId: () => strin
     }],
     furniture,
   });
-  const notes = extraction.notes + (dropped > 0 ? ` (${dropped} object${dropped === 1 ? "" : "s"} without a catalog match were skipped.)` : "");
+  const read = extraction.measurements.length ? `Read from image: ${extraction.measurements.map((entry) => `${entry.label} → ${entry.meters} m (${entry.axis})`).join(", ")}. ` : "";
+  const notes = read + (corrections.length ? corrections.join("; ") + ". " : "") + extraction.notes + (dropped > 0 ? ` (${dropped} object${dropped === 1 ? "" : "s"} without a catalog match were skipped.)` : "");
   return { scene, notes: notes.trim(), issues: validateScene(scene).issues, model };
 }

@@ -8,6 +8,7 @@ import { useWorkspaceStore, type TransformTool } from "../store/workspace";
 import { usePerfStore, viewportBridge } from "../lib/perf";
 import { useContextMenu } from "../lib/ui";
 import { FurnitureModel } from "./viewport/FurnitureModel";
+import { CutoutModel, isCutout } from "./viewport/CutoutModel";
 import { RoomShell } from "./viewport/Room";
 import { ARTIFICIAL_LIGHT_FACTOR, SceneEnvironment } from "./viewport/Environment";
 import { MeshEditor } from "./viewport/MeshEditor";
@@ -60,7 +61,11 @@ const FurnitureItem = memo(function FurnitureItem({
         useContextMenu.getState().open(event.nativeEvent.clientX, event.nativeEvent.clientY, item.id);
       }}
     >
-      {!lowDetail && hasRealisticModel(item) ? (
+      {isCutout(item) ? (
+        <Suspense fallback={<FurnitureModel item={{ ...item, catalogItemId: undefined }} lowDetail castShadow={false} lightOn={false} />}>
+          <CutoutModel item={item} castShadow={shadows} />
+        </Suspense>
+      ) : !lowDetail && hasRealisticModel(item) ? (
         // Procedural model shows while the photoreal glTF streams in.
         <Suspense fallback={<FurnitureModel item={item} lowDetail={false} castShadow={false} lightOn={lightOn} />}>
           <RealisticModel item={item} castShadow={shadows} />
@@ -259,6 +264,9 @@ function CameraRig({ scene, selectedId, room }: { scene: Scene; selectedId: stri
 /** First-person walkthrough: drag to look around, WASD/arrow keys to walk; stays inside the room at eye height. */
 function Walkthrough({ room }: { room: Room | undefined }) {
   const { camera, gl } = useThree();
+  const walkMode = useWorkspaceStore((state) => state.walkMode);
+  const roamRef = useRef(walkMode === "roam");
+  roamRef.current = walkMode === "roam";
   const keys = useRef(new Set<string>());
   const look = useRef({ yaw: Math.PI, pitch: 0 });
   useEffect(() => {
@@ -267,7 +275,8 @@ function Walkthrough({ room }: { room: Room | undefined }) {
     look.current = { yaw: 0, pitch: -0.05 };
     let dragging = false;
     const down = (event: PointerEvent) => {
-      if (event.target === gl.domElement && event.button === 0) dragging = true;
+      // Tour: left-drag looks. Free roam: left button edits objects, right-drag looks.
+      if (event.target === gl.domElement && event.button === (roamRef.current ? 2 : 0)) dragging = true;
     };
     const up = () => (dragging = false);
     const move = (event: PointerEvent) => {
@@ -299,17 +308,24 @@ function Walkthrough({ room }: { room: Room | undefined }) {
     const { yaw, pitch } = look.current;
     const forward = new Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const right = new Vector3(-forward.z, 0, forward.x);
-    const step = 1.6 * delta;
     const k = keys.current;
+    const roam = roamRef.current;
+    const step = (roam ? (k.has("shift") ? 6 : 3) : 1.6) * delta;
     if (k.has("w") || k.has("arrowup")) camera.position.addScaledVector(forward, step);
     if (k.has("s") || k.has("arrowdown")) camera.position.addScaledVector(forward, -step);
     if (k.has("d") || k.has("arrowright")) camera.position.addScaledVector(right, step);
     if (k.has("a") || k.has("arrowleft")) camera.position.addScaledVector(right, -step);
-    const halfW = room.dimensions.width / 2 - 0.25;
-    const halfD = room.dimensions.depth / 2 - 0.25;
-    camera.position.x = Math.max(room.position.x - halfW, Math.min(room.position.x + halfW, camera.position.x));
-    camera.position.z = Math.max(room.position.z - halfD, Math.min(room.position.z + halfD, camera.position.z));
-    camera.position.y = room.position.y + 1.6;
+    if (roam) {
+      // Free flight: no walls, E / Space up, Q / C down.
+      if (k.has("e") || k.has(" ")) camera.position.y += step;
+      if (k.has("q") || k.has("c")) camera.position.y -= step;
+    } else {
+      const halfW = room.dimensions.width / 2 - 0.25;
+      const halfD = room.dimensions.depth / 2 - 0.25;
+      camera.position.x = Math.max(room.position.x - halfW, Math.min(room.position.x + halfW, camera.position.x));
+      camera.position.z = Math.max(room.position.z - halfD, Math.min(room.position.z + halfD, camera.position.z));
+      camera.position.y = room.position.y + 1.6;
+    }
     camera.rotation.set(pitch, yaw, 0, "YXZ");
   });
   return null;
@@ -403,6 +419,7 @@ export function SceneViewport() {
   // Plans read best flat: no sun shadows in 2D.
   const showGrid = useWorkspaceStore((state) => state.showGrid);
   const gridSize = useWorkspaceStore((state) => state.gridSize);
+  const walkMode = useWorkspaceStore((state) => state.walkMode);
   const flatView = viewMode === "top" || viewMode === "front" || viewMode === "side";
   const shadows = scene.environment.shadows && !lowDetail && !flatView;
   const lightScale = scene.environment.artificialLightScale * ARTIFICIAL_LIGHT_FACTOR[scene.environment.mode];
@@ -528,7 +545,7 @@ export function SceneViewport() {
             lightScale={lightScale}
             groupRef={item.id === selectedId ? setSelectedGroup : undefined}
             onSelect={selectEntity}
-            draggable={tool === "select" || tool === "translate" || tool === "rotate"}
+            draggable={(tool === "select" || tool === "translate" || tool === "rotate") && !(viewMode === "walk" && walkMode === "view")}
           />
         );
       })}

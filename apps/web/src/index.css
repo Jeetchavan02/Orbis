@@ -682,3 +682,58 @@ details.inspector-block:not([open]) > summary::after { transform: rotate(-90deg)
 .lib-card:hover .lib-fav, .lib-fav--on, .lib-fav:focus-visible { opacity: 1; }
 .lib-fav--on { color: #e5483d; }
 @media (max-width: 1100px) { .vp-pill { left: auto; right: 12px; transform: none; } }
+
+/* ---- Camera menu ---- */
+.viewport-wrap .vp-camera { padding: 0; }
+.vp-camera-trigger { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
+.vp-camera-trigger strong { color: var(--ink); font-weight: 600; }
+.vp-camera-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 200px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); box-shadow: var(--shadow-pop); }
+.vp-camera-menu button { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.vp-camera-menu button:hover { background: var(--surface); }
+.vp-camera-menu button.active { color: var(--accent, #6a3de8); font-weight: 600; }
+.vp-camera-menu .vp-check { display: grid; place-items: center; width: 14px; }
+.vp-camera-menu .vp-label { flex: 1; }
+.vp-camera-menu kbd { min-width: 20px; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); color: var(--muted); font: 600 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+
+/* ---- Floor actions ---- */
+.floor-actions { margin: 6px 10px 4px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.floor-actions-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.floor-actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.floor-actions-grid button { display: flex; align-items: center; gap: 5px; padding: 6px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink-2); font-size: 11.5px; cursor: pointer; }
+.floor-actions-grid button:hover { border-color: var(--accent, #6a3de8); color: var(--accent, #6a3de8); }
+
+/* ---- Walkthrough mode bar ---- */
+.vp-walk { position: absolute; bottom: 12px; left: 50%; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 6px; transform: translateX(-50%); pointer-events: none; }
+.vp-walk .segmented { pointer-events: auto; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: rgb(255 255 255 / 96%); box-shadow: var(--shadow-pop); }
+.vp-walk .segmented button.active { background: var(--accent, #6a3de8); color: #fff; }
+.vp-walk-keys { padding: 4px 10px; border-radius: 8px; background: rgb(20 20 30 / 70%); color: #fff; font-size: 11px; white-space: nowrap; }
+.vp-walk-keys kbd { margin: 0 1px; padding: 0 4px; border-radius: 3px; background: rgb(255 255 255 / 20%); font: 600 10px/14px ui-monospace, Menlo, monospace; }
+
+/* ---- Photo → 3D ---- */
+.modal.photo3d { position: relative; width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow-y: auto; }
+.photo3d h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 17px; }
+.photo3d-close { position: absolute; top: 12px; right: 12px; }
+.photo3d-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+.photo3d-pane { position: relative; display: grid; place-items: center; height: 260px; padding: 10px 10px 28px; border: 1px dashed var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; cursor: pointer; }
+.photo3d-pane img { width: 100%; height: 222px; object-fit: contain; }
+.photo3d-pane--checker { cursor: default; border-style: solid; background-color: #fff; background-image: linear-gradient(45deg, #e6e6ea 25%, transparent 25%), linear-gradient(-45deg, #e6e6ea 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e6e6ea 75%), linear-gradient(-45deg, transparent 75%, #e6e6ea 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0; }
+.photo3d-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.photo3d-caption { position: absolute; bottom: 6px; left: 0; right: 0; color: var(--muted); font-size: 11px; text-align: center; }
+.photo3d-row { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.photo3d-row small { color: var(--muted); }
+.photo3d-fields { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+.photo3d-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--ink-2); }
+.photo3d-fields input { height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; }
+.field-note.warn { color: #b7791f; }
+.import-card--photo { margin-top: 6px; }
+.left-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.head-upload { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--accent, #6a3de8); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+.head-upload:hover { filter: brightness(1.08); }
+
+/* ---- Library "More" pill ---- */
+.lib-more { position: relative; }
+.lib-pills .lib-more > button { display: flex; align-items: center; gap: 4px; }
+.lib-more-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; display: flex; flex-direction: column; min-width: 180px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); box-shadow: var(--shadow-pop); }
+.lib-pills .lib-more-menu button { display: flex; align-items: center; justify-content: space-between; height: auto; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font-size: 13px; text-align: left; }
+.lib-pills .lib-more-menu button:hover { background: var(--surface); }
+.lib-pills .lib-more-menu button.active { background: var(--accent-soft, #efe9ff); color: var(--accent, #6a3de8); font-weight: 600; }

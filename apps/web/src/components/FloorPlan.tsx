@@ -119,15 +119,33 @@ function Walls({ room }: { room: Room }) {
   return <g>{parts}</g>;
 }
 
+/** Architectural dimension: |◄── label ──►| with end ticks, arrowheads and a gap in the line for the label. */
 function Dimension({ x1, y1, x2, y2, label, vertical }: { x1: number; y1: number; x2: number; y2: number; label: string; vertical?: boolean }) {
-  const tick = 0.12;
+  const tick = 0.14;
+  const arrow = 0.14;
+  const length = Math.hypot(x2 - x1, y2 - y1);
+  const cx = (x1 + x2) / 2;
+  const cy = (y1 + y2) / 2;
+  const gap = Math.min(length / 2 - arrow - 0.05, label.length * 0.058 + 0.12);
+  // Work along a local axis (u) and map to x/y.
+  const at = (u: number, v = 0): [number, number] => (vertical ? [cx + v, cy + u] : [cx + u, cy + v]);
+  const half = length / 2;
+  const seg = (a: [number, number], b: [number, number], key: string) => <line key={key} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} />;
+  const head = (side: number) => {
+    const tip = at(side * half);
+    const base1 = at(side * (half - arrow), arrow * 0.35);
+    const base2 = at(side * (half - arrow), -arrow * 0.35);
+    return <polygon key={"a" + side} points={`${tip.join(",")} ${base1.join(",")} ${base2.join(",")}`} fill={INK} stroke="none" />;
+  };
   return (
     <g stroke={INK} strokeWidth={LINE * 0.7}>
-      <line x1={x1} y1={y1} x2={x2} y2={y2} />
-      {vertical
-        ? <><line x1={x1 - tick} y1={y1} x2={x1 + tick} y2={y1} /><line x1={x2 - tick} y1={y2} x2={x2 + tick} y2={y2} /></>
-        : <><line x1={x1} y1={y1 - tick} x2={x1} y2={y1 + tick} /><line x1={x2} y1={y2 - tick} x2={x2} y2={y2 + tick} /></>}
-      <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - (vertical ? 0 : 0.1)} fontSize={0.2} fill={INK} stroke="none" textAnchor="middle" transform={vertical ? `rotate(-90 ${(x1 + x2) / 2 - 0.1} ${(y1 + y2) / 2})` : undefined}>{label}</text>
+      {seg(at(-half), at(-gap), "l")}
+      {seg(at(gap), at(half), "r")}
+      {seg(at(-half, -tick), at(-half, tick), "t1")}
+      {seg(at(half, -tick), at(half, tick), "t2")}
+      {head(-1)}
+      {head(1)}
+      <text x={cx} y={cy} fontSize={0.2} fill={INK} stroke="none" textAnchor="middle" dominantBaseline="central" transform={vertical ? `rotate(-90 ${cx} ${cy})` : undefined}>{label}</text>
     </g>
   );
 }
