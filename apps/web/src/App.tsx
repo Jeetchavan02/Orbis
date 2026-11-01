@@ -26,6 +26,7 @@ import { LeftPanel } from "./components/panels/LeftPanel";
 import { dragging, LIBRARY_DRAG_TYPE } from "./components/panels/Library";
 import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
+import { ExportPdfDialog } from "./components/panels/ExportPdfDialog";
 import { ConflictDialog, JoinPrompt, MissingProject, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
 import { LabelInput } from "./components/viewport/Annotations";
@@ -272,6 +273,7 @@ export default function App() {
       </div>
       <ConflictDialog />
       <ShareDialog />
+      <ExportPdfDialog />
       <LabelInput />
       <ShortcutHelp />
       <ToolBanner />

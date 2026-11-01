@@ -16,7 +16,21 @@ export function currentProjectId(): string | null {
 }
 
 export const projectPath = (id: string) => `/project/${encodeURIComponent(id)}`;
-export const projectUrl = (id: string) => location.origin + projectPath(id);
+/** Public address from the server (e.g. the Cloudflare tunnel), so links shared from 127.0.0.1 work for others. */
+let publicOrigin: string | null = null;
+export const isLocalHost = () => ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+export async function loadPublicOrigin(): Promise<string | null> {
+  try {
+    const { url } = (await (await fetch("/api/public-url")).json()) as { url: string | null };
+    publicOrigin = url;
+  } catch {
+    // Keep the last known value; links fall back to this page's address.
+  }
+  return publicOrigin;
+}
+void loadPublicOrigin();
+export const shareOrigin = () => publicOrigin ?? location.origin;
+export const projectUrl = (id: string) => shareOrigin() + projectPath(id);
 
 function read<T>(key: string, fallback: T): T {
   try {

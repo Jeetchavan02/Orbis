@@ -72,6 +72,8 @@ type WorkspaceStore = {
   peers: Peer[];
   conflict: ConflictState | null;
   offlineConflict: OfflineConflict | null;
+  /** Share-link permission for this browser, sent by the server on join and whenever the owner changes it. */
+  access: { linkAccess: "edit" | "view"; canEdit: boolean; owner: boolean };
   /** Edits applied locally while disconnected (not on the server). */
   offlineEdits: number;
   saveStatus: { state: "saved" | "unsaved" | "saving" | "local"; savedAt: string | null; path: string | null };
@@ -350,6 +352,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         }
         return;
       }
+      case "access": {
+        const was = get().access;
+        set({ access: { linkAccess: message.linkAccess, canEdit: message.canEdit, owner: message.owner } });
+        if (was.canEdit && !message.canEdit) notify("info", "The owner made this link view only. You can watch changes live but not edit.");
+        if (!was.canEdit && message.canEdit) notify("info", "You can edit this project now.");
+        return;
+      }
       case "project-deleted":
         notify("error", "This project was deleted by its owner.");
         forgetProject(sceneId);
@@ -493,6 +502,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     peers: [],
     conflict: null,
     offlineConflict: null,
+    access: { linkAccess: "edit", canEdit: true, owner: false },
     offlineEdits: restoredOfflineWork?.edits ?? 0,
     saveStatus: { state: restoredOfflineWork ? "local" : "saved", savedAt: null, path: null },
     validation: null,
@@ -509,6 +519,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     dispatch: (action, options = {}) => {
       const label = options.label ?? describeAction(action);
       const state = get();
+      if (!state.access.canEdit) {
+        notify("info", "This link is view only. Ask the owner for edit access.");
+        return false;
+      }
       let ok: boolean;
       if (state.connection === "online") {
         const base = { ...baseVersionsFor(state.scene, action), ...(options.base ? pick(options.base, action) : {}) };
@@ -521,6 +535,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     },
 
     undo: () => {
+      if (!get().access.canEdit) return;
       const entry = get().history.past.at(-1);
       if (!entry || [...pending.values()].some((item) => item.kind !== "do")) return;
       if (get().connection === "online" && sendAction("undo", entry.inverse, "Undo " + entry.label, pick(entry.versions, entry.inverse), entry)) return;
@@ -528,6 +543,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     },
 
     redo: () => {
+      if (!get().access.canEdit) return;
       const entry = get().history.future[0];
       if (!entry || [...pending.values()].some((item) => item.kind !== "do")) return;
       if (get().connection === "online" && sendAction("redo", entry.forward, "Redo " + entry.label, pick(entry.versions, entry.forward), entry)) return;

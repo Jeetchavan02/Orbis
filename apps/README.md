@@ -25,6 +25,23 @@ Open http://127.0.0.1:5173. The API/collaboration server runs on 127.0.0.1:3001 
 
 The production build is one Node process that serves the web app, the API and the collaboration WebSocket from the same address, so a share link like `https://<your-app>/project/<id>` works from any device or network. Anyone with the link can edit (no sign-up). The homepage only lists projects your browser created or opened, and only the creator can delete a project.
 
+### Sharing, link access and the design PDF
+
+* **Share** dialog: copy the `/project/<id>` link, or **Share on WhatsApp** (opens `wa.me` with a prefilled message and the link; you pick the contact or group).
+* **Anyone with the link: Can edit / Can view** (Canva-style). Only the owner can change it: the signed-in account that created the project, or the browser that holds its owner key. The server enforces it, so view-only guests can't edit even from a modified client. The owner always keeps editing, changes apply immediately to people already connected, and the setting is stored in `RB_DATA_DIR/link-access.json`. Default: Can edit.
+* **Export PDF** (top bar, or the ▾ menu → *Download design PDF*): renders 9 views from the live 3D scene (bird's-eye, floor plan, front/back/left/right elevations, two corner perspectives, eye-level interior) and builds a landscape A4 report in the browser: cover, one page per view, and a furniture schedule. You can preview, download (`Orbis_<Project>_Design.pdf`), share through the device share sheet where the browser supports file sharing, or send the project link on WhatsApp. Exporting reads the scene only. Scene JSON export/import is still available in the ▾ menu.
+
+### Share from your own computer (Cloudflare tunnel, any network, no account)
+
+```bash
+brew install cloudflared   # once
+npm run share              # build → production server on 127.0.0.1:8787 → public https link
+```
+
+It prints `Orbis is live: https://<random>.trycloudflare.com` once the link answers from the internet. Open a project and click **Share** to copy its `/project/<id>` link; it works on any network, including mobile data. Keep the terminal open and the computer awake; Ctrl+C stops the server and the tunnel together. Each run gets a new random address, so send the new link after a restart. Projects stay in `server/data`, same as in development. `npm run share -- --no-build` skips the build; `SHARE_PORT` changes the local port.
+
+Check the public link: `npm run smoke:collab -- https://<random>.trycloudflare.com` (it leaves one `smoke-…@example.com` account behind).
+
 ### Deploy on Railway (recommended: always on, WebSockets, persistent volume)
 
 1. Push this repo to GitHub. In Railway: **New Project → Deploy from GitHub repo**.

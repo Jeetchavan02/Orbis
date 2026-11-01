@@ -71,6 +71,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), message: z.string() }),
   /** The project was deleted while you were connected. */
   z.object({ type: z.literal("project-deleted") }),
+  /** Link permission for this connection: "view" links can watch live but not edit. The owner always edits. */
+  z.object({ type: z.literal("access"), linkAccess: z.enum(["edit", "view"]), canEdit: z.boolean(), owner: z.boolean() }),
 ]);
 
 export type BaseVersions = z.infer<typeof BaseVersionsSchema>;

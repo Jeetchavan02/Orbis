@@ -79,7 +79,7 @@ function Wall({ room, side, cutaway }: { room: Room; side: WallSide; cutaway: bo
   const alongSign = side === "south" || side === "west" ? -1 : 1;
   return (
     <group position={[center[0], 0, center[1]]} rotation={[0, frame.yaw * DEG, 0]}>
-      <group ref={groupRef}>
+      <group ref={groupRef} userData={{ cutawayWall: { normal: frame.normal, half: (horizontal ? depth : width) / 2, cutaway: CUTAWAY_HEIGHT / height } }}>
         {segments.map((segment, index) => (
           <mesh key={index} position={[((segment.from + segment.to) / 2) * alongSign, (segment.bottom + segment.top) / 2, 0]} castShadow receiveShadow>
             <boxGeometry args={[segment.to - segment.from, segment.top - segment.bottom, t]} />

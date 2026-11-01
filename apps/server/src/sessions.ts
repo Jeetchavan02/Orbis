@@ -12,7 +12,9 @@ import {
   type ServerMessage,
 } from "@reality-builder/shared";
 
-export type ClientHandle = { send: (message: ServerMessage) => void; close?: () => void };
+/** `owner`: the project's creator (account or owner key); owners can edit even when the link is view-only. */
+export type ClientHandle = { send: (message: ServerMessage) => void; close?: () => void; owner?: boolean };
+export type LinkAccess = "edit" | "view";
 
 type Connected = { handle: ClientHandle; peer: Peer | null };
 
@@ -27,6 +29,23 @@ export class SceneSession {
   private clients = new Map<ClientHandle, Connected>();
   /** Display name of whoever last changed each entity, for conflict explanations. */
   private lastChangedBy = new Map<string, string>();
+
+  /** What anyone with the share link may do. */
+  linkAccess: LinkAccess = "edit";
+
+  canEdit(handle: ClientHandle) {
+    return this.linkAccess === "edit" || !!handle.owner;
+  }
+
+  private accessMessage(handle: ClientHandle): ServerMessage {
+    return { type: "access", linkAccess: this.linkAccess, canEdit: this.canEdit(handle), owner: !!handle.owner };
+  }
+
+  /** Changes the link permission and tells every connected client what it may now do. */
+  setLinkAccess(access: LinkAccess) {
+    this.linkAccess = access;
+    for (const client of this.clients.values()) if (client.peer) client.handle.send(this.accessMessage(client.handle));
+  }
 
   constructor(scene: Scene, private readonly onChange: (session: SceneSession, immediate: boolean) => void = () => {}) {
     this.scene = SceneSchema.parse(scene);
@@ -74,6 +93,7 @@ export class SceneSession {
         }
         client.peer = { clientId: message.clientId, name: message.name, color: message.color, selectedId: null, cursor: null };
         handle.send({ type: "welcome", scene: this.scene, seq: this.seq, peers: this.peers, selfId: message.clientId });
+        handle.send(this.accessMessage(handle));
         this.broadcastPeers();
         return;
       }
@@ -98,11 +118,19 @@ export class SceneSession {
           handle.send({ type: "error", message: "Send hello before editing." });
           return;
         }
+        if (!this.canEdit(handle)) {
+          handle.send({ type: "rejected", requestId: message.requestId, reason: "invalid", message: "This link is view only. Ask the owner for edit access.", conflicts: [] });
+          return;
+        }
         this.applyAction(handle, client.peer, message.requestId, message.action, message.baseVersions, message.label);
         return;
       }
       case "load-scene": {
         if (!client.peer) return;
+        if (!this.canEdit(handle)) {
+          handle.send({ type: "load-rejected", requestId: message.requestId, seq: this.seq, message: "This link is view only, so the scene wasn't replaced." });
+          return;
+        }
         if (message.baseSeq !== this.seq) {
           // Someone changed the scene after this client last synced: never let an older snapshot win silently.
           const by = [...new Set(this.lastChangedBy.values())].filter((name) => name !== client.peer!.name);

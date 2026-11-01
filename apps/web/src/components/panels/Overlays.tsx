@@ -1,11 +1,13 @@
-import { AlertTriangle, Check, CheckCircle2, Copy, Globe2, Info, Laptop, Link2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Copy, Eye, FileText, Globe2, Info, Laptop, Link2, X } from "lucide-react";
 import type { FurnitureObject, Room } from "@reality-builder/shared";
 import { usePerfStore } from "../../lib/perf";
 import { useEffect, useState } from "react";
 import { currentIdentity, useWorkspaceStore } from "../../store/workspace";
-import { useShareDialog } from "../../lib/ui";
+import { useExportPdf, useShareDialog } from "../../lib/ui";
+import { openWhatsApp, shareMessage } from "../../lib/share";
+import { WhatsAppIcon } from "./WhatsAppIcon";
 import { saveDefaultProfile } from "../../lib/collab";
-import { currentProjectId, projectUrl } from "../../lib/project";
+import { currentProjectId, isLocalHost, loadPublicOrigin, ownerKeyFor, projectUrl } from "../../lib/project";
 
 /** Live measurements only: FPS/draw calls from the render loop, the rest from the last validation run. */
 export function PerfOverlay() {
@@ -127,17 +129,42 @@ export function ShareDialog() {
   const [name, setName] = useState(currentIdentity.name);
   const [color, setColor] = useState(currentIdentity.color);
   const [copied, setCopied] = useState<string | null>(null);
+  const [, setOriginChecked] = useState(0); // re-render once the public address is known
+  const access = useWorkspaceStore((state) => state.access);
+  const [accessSaving, setAccessSaving] = useState(false);
+  const changeAccess = async (linkAccess: "edit" | "view") => {
+    const id = currentProjectId();
+    if (!id) return;
+    setAccessSaving(true);
+    try {
+      const key = ownerKeyFor(id);
+      const response = await fetch(`/api/projects/${encodeURIComponent(id)}/access`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json", ...(key ? { "x-owner-key": key } : {}) },
+        body: JSON.stringify({ linkAccess }),
+      });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't change link access.");
+      useWorkspaceStore.getState().notify("info", linkAccess === "view" ? "Link set to view only." : "Anyone with the link can edit again.");
+    } catch (error) {
+      useWorkspaceStore.getState().notify("error", (error as Error).message);
+    } finally {
+      setAccessSaving(false);
+    }
+  };
   useEffect(() => {
     if (!open) return;
     setName(currentIdentity.name);
     setColor(currentIdentity.color);
     fetch("/api/network").then((response) => response.json()).then((data: { addresses: string[] }) => setAddresses(data.addresses)).catch(() => setAddresses([]));
+    void loadPublicOrigin().then(() => setOriginChecked((count) => count + 1));
   }, [open]);
   if (!open) return null;
 
   const sceneId = currentProjectId() ?? "default";
   const link = projectUrl(sceneId);
-  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+  // Only "local" when no public address is known: with `npm run share` the link above is already the internet one.
+  const loopback = isLocalHost() && link.startsWith(location.origin);
   const lanLinks = loopback ? addresses.map((address) => `${location.protocol}//${address}:${location.port}/project/${encodeURIComponent(sceneId)}`) : [];
   const copy = async (value: string) => {
     try {
@@ -157,18 +184,38 @@ export function ShareDialog() {
           <button type="button" className="icon-button" aria-label="Close" onClick={() => setOpen(false)}><X size={16} /></button>
         </header>
         <div className={"share-access" + (loopback ? " share-access--local" : "")}>
-          <span className="share-access-icon">{loopback ? <Laptop size={16} /> : <Globe2 size={16} />}</span>
-          <span>
-            <strong>{loopback ? "Only this computer can open this link" : "Anyone with the link can edit"}</strong>
-            <span>{loopback
-              ? "You're running Orbis locally. Use the deployed site to share over the internet."
-              : "No sign-up needed. Everyone who opens it joins this live scene, and conflicting edits are never silently overwritten."}</span>
+          <span className="share-access-icon">{loopback ? <Laptop size={16} /> : access.linkAccess === "view" ? <Eye size={16} /> : <Globe2 size={16} />}</span>
+          <span className="share-access-text">
+            <span className="share-access-row">
+              <strong>Anyone with the link</strong>
+              <select
+                className="share-access-select"
+                aria-label="Link permission"
+                value={access.linkAccess}
+                disabled={!access.owner || accessSaving || connection !== "online"}
+                title={access.owner ? "Choose what people with the link can do" : "Only the project owner can change this"}
+                onChange={(event) => void changeAccess(event.target.value as "edit" | "view")}
+              >
+                <option value="edit">Can edit</option>
+                <option value="view">Can view</option>
+              </select>
+            </span>
+            <span>{access.linkAccess === "view"
+              ? "People with the link can watch this live scene but not change it. You (the owner) can still edit."
+              : "No sign-up needed. Everyone who opens it joins this live scene, and conflicting edits are never silently overwritten."}
+              {!access.owner ? " Only the owner can change this setting." : ""}
+              {loopback ? " You're running Orbis locally: use the deployed site to share over the internet." : ""}</span>
           </span>
         </div>
         <div className="share-primary">
           <span className="share-url"><Link2 size={14} /><input readOnly value={link} onFocus={(event) => event.currentTarget.select()} aria-label="Project link" /></span>
           <button type="button" className="primary-button" onClick={() => void copy(link)}>{copied === link ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy link</>}</button>
         </div>
+        <div className="share-channels">
+          <button type="button" className="whatsapp-button" onClick={() => openWhatsApp(shareMessage(link))}><WhatsAppIcon size={15} /> Share on WhatsApp</button>
+          <button type="button" className="ghost-button" onClick={() => { setOpen(false); useExportPdf.getState().setOpen(true); }}><FileText size={14} /> Design PDF</button>
+        </div>
+        {copied === link ? <p className="share-copied" role="status">Link copied. Anyone who opens it can {access.linkAccess === "view" ? "view" : "view and edit"} this project.</p> : null}
         {lanLinks.length ? (
           <details className="share-lan">
             <summary>Same Wi-Fi links</summary>
@@ -194,8 +241,8 @@ export function ShareDialog() {
           {connection !== "online" ? <li className="field-note">Not connected to the collaboration server.</li> : null}
           {peers.map((peer) => (
             <li key={peer.clientId}>
-              <span className="avatar" style={{ background: peer.color, marginLeft: 0 }}>{peer.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
-              <span><strong>{peer.name}{peer.clientId === selfId ? " (you)" : ""}</strong><span className="muted">{peer.selectedId ? "editing " + (scene.furniture.find((item) => item.id === peer.selectedId)?.name ?? scene.rooms.find((room) => room.id === peer.selectedId)?.name ?? "an object") : "viewing"}</span></span>
+              <span className="avatar avatar--online" style={{ background: peer.color, marginLeft: 0 }}>{peer.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
+              <span><strong>{peer.name}{peer.clientId === selfId ? " (you)" : ""}</strong><span className="muted"><span className="online-dot" aria-hidden="true" />Online · {peer.selectedId ? "editing " + (scene.furniture.find((item) => item.id === peer.selectedId)?.name ?? scene.rooms.find((room) => room.id === peer.selectedId)?.name ?? "an object") : "viewing"}</span></span>
             </li>
           ))}
         </ul>

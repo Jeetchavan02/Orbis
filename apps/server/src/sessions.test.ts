@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SceneSchema, type ServerMessage } from "@reality-builder/shared";
-import { SceneSession } from "./sessions.js";
+import { SceneSession, type ClientHandle } from "./sessions.js";
 
 const bedroom = SceneSchema.parse(JSON.parse(readFileSync(resolve(process.cwd(), "fixtures/bedroom-scene.json"), "utf8")));
 
 function client(session: SceneSession, name: string) {
   const inbox: ServerMessage[] = [];
-  const handle = { send: (message: ServerMessage) => inbox.push(message) };
+  const handle: ClientHandle = { send: (message: ServerMessage) => inbox.push(message) };
   session.connect(handle);
   session.handle(handle, { type: "hello", sceneId: "t", clientId: name.toLowerCase(), name, color: "#123456" });
   return { handle, inbox, last: () => inbox[inbox.length - 1]! };
@@ -184,5 +184,43 @@ describe("open-link joining", () => {
     expect(closed).toBe(2);
     expect(inbox.filter((message) => message.type === "project-deleted")).toHaveLength(2);
     expect(session.size).toBe(0);
+  });
+});
+
+describe("share link access (Can edit / Can view)", () => {
+  it("tells each client what it may do when it joins", () => {
+    const session = new SceneSession(bedroom);
+    const guest = client(session, "Guest");
+    expect(guest.inbox.find((message) => message.type === "access")).toEqual({ type: "access", linkAccess: "edit", canEdit: true, owner: false });
+  });
+
+  it("rejects edits from view-only guests but lets the owner edit, and nothing changes for the guest", () => {
+    const session = new SceneSession(bedroom);
+    const owner = client(session, "Owner");
+    owner.handle.owner = true;
+    const guest = client(session, "Guest");
+    session.setLinkAccess("view");
+    expect(guest.last()).toEqual({ type: "access", linkAccess: "view", canEdit: false, owner: false });
+    expect(owner.last()).toEqual({ type: "access", linkAccess: "view", canEdit: true, owner: true });
+
+    session.handle(guest.handle, moveBed(0.3, 1, "g1"));
+    expect(guest.last()).toMatchObject({ type: "rejected", requestId: "g1", reason: "invalid" });
+    expect(session.seq).toBe(0);
+
+    session.handle(guest.handle, { type: "load-scene", requestId: "g2", baseSeq: 0, scene: bedroom });
+    expect(guest.last()).toMatchObject({ type: "load-rejected", requestId: "g2" });
+
+    session.handle(owner.handle, moveBed(0.3, 1, "o1"));
+    expect(session.seq).toBe(1);
+    expect(guest.last()).toMatchObject({ type: "applied", requestId: "o1" }); // viewers still see edits live
+  });
+
+  it("restores editing for everyone when the link goes back to Can edit", () => {
+    const session = new SceneSession(bedroom);
+    const guest = client(session, "Guest");
+    session.setLinkAccess("view");
+    session.setLinkAccess("edit");
+    session.handle(guest.handle, moveBed(0.3, 1, "g1"));
+    expect(guest.last()).toMatchObject({ type: "applied", requestId: "g1" });
   });
 });

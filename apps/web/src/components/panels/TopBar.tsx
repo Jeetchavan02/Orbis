@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { OrbisMark } from "../brand/Logo";
-import { Bell, Home, PersonStanding, Sparkles, Users } from "lucide-react";
-import { useAskAi, useShareDialog } from "../../lib/ui";
+import { Bell, Eye, FileDown, FileJson, Home, PersonStanding, Sparkles, Users } from "lucide-react";
+import { useAskAi, useExportPdf, useShareDialog } from "../../lib/ui";
 import { Check, ChevronDown, Layers, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
 import type { EnvironmentMode } from "@reality-builder/shared";
 import { apartmentScene, starterScene } from "../../data/scene";
@@ -23,6 +23,7 @@ const MODES: { id: EnvironmentMode; label: string; icon: typeof Sun }[] = [
 ];
 
 export function TopBar() {
+  const canEdit = useWorkspaceStore((state) => state.access.canEdit);
   const scene = useWorkspaceStore((state) => state.scene);
   const history = useWorkspaceStore((state) => state.history);
   const connection = useWorkspaceStore((state) => state.connection);
@@ -129,6 +130,7 @@ export function TopBar() {
           ))}
           {others.length > 4 ? <span className="avatar avatar--more">+{others.length - 4}</span> : null}
         </div>
+        {!canEdit ? <span className="view-only-pill" title="The owner shared this link as view only"><Eye size={13} /> View only</span> : null}
         <span className={"connection connection--" + connection} title={connection === "online" ? `Live · ${peers.length} ${peers.length === 1 ? "person" : "people"} in this project` : connection === "connecting" ? (wasOnline ? "Connection lost. Reconnecting…" : "Connecting…") : connection === "missing" ? "This project doesn't exist or was deleted" : "Offline. Edits stay on this device and you'll be asked how to merge when you reconnect"}>
           {connection === "online" ? <Wifi size={13} /> : connection === "connecting" ? <Loader2 size={13} className="spin" /> : <CloudOff size={13} />}
           {connection === "online" ? (peers.length > 1 ? `Live · ${peers.length}` : "Live") : connection === "connecting" ? (wasOnline ? "Reconnecting" : "Connecting") : connection === "missing" ? "Not found" : "Offline"}
@@ -136,14 +138,17 @@ export function TopBar() {
         <button type="button" className={"icon-button" + (showPerf ? " icon-button--active" : "")} onClick={() => setShowPerf(!showPerf)} title="Performance overlay (P)" aria-label="Performance overlay"><Gauge size={16} /></button>
         <button type="button" className={"ghost-button" + (viewMode === "walk" ? " ghost-button--active" : "")} onClick={() => setViewMode(viewMode === "walk" ? "perspective" : "walk")} title="Walk through the room at eye height (WASD to move)"><PersonStanding size={14} /> {viewMode === "walk" ? "Exit walk" : "Walkthrough"}</button>
         <NotificationsBell />
+        <button type="button" className="ghost-button topbar-export" onClick={() => useExportPdf.getState().setOpen(true)} title="Download a multi-view design PDF"><FileDown size={14} /> <span>Export PDF</span></button>
         <button type="button" className="ghost-button" onClick={() => useShareDialog.getState().setOpen(true)} title="Invite collaborators"><Users size={14} /> Share</button>
         <button type="button" className="primary-button" onClick={save} title="Save (⌘S)"><Save size={14} /> Save</button>
         <div className="menu" ref={menuRef}>
           <button type="button" className="icon-button" onClick={() => setMenuOpen(!menuOpen)} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Scene menu"><ChevronDown size={16} /></button>
           {menuOpen ? (
             <div className="menu-popover" role="menu">
-              <button type="button" role="menuitem" onClick={() => { downloadScene(scene); setMenuOpen(false); }}><Download size={14} /> Export scene (.json)</button>
+              <button type="button" role="menuitem" onClick={() => { useExportPdf.getState().setOpen(true); setMenuOpen(false); }}><Download size={14} /> Download design PDF</button>
+              <span className="menu-sep" />
               <button type="button" role="menuitem" onClick={() => { fileRef.current?.click(); setMenuOpen(false); }}><FolderOpen size={14} /> Open scene file…</button>
+              <button type="button" role="menuitem" onClick={() => { downloadScene(scene); setMenuOpen(false); }}><FileJson size={14} /> Export scene data (.json)</button>
               <span className="menu-sep" />
               <button type="button" role="menuitem" onClick={() => { replaceScene(starterScene, "Loaded the demo bedroom."); setMenuOpen(false); }}><RotateCcw size={14} /> Load demo bedroom</button>
               <button type="button" role="menuitem" onClick={() => { replaceScene(apartmentScene, "Loaded the 3-floor demo apartment."); setMenuOpen(false); }}><Layers size={14} /> Load demo apartment (3 floors)</button>

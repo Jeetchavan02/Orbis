@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
 import { AiQuotaError, AiUnavailableError, aiModel, assembleRoom, runAiEdit, runBriefToRoom, runImageToRoom, runPlanAnalyze } from "./ai.js";
-import { SceneSession, type ClientHandle } from "./sessions.js";
+import { SceneSession, type ClientHandle, type LinkAccess } from "./sessions.js";
 import { Accounts } from "./auth.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -106,7 +106,11 @@ function scheduleSave(id: string, session: SceneSession, immediate = false) {
 function getSession(id: string): Promise<SceneSession> {
   let session = sessions.get(id);
   if (!session) {
-    session = loadInitialScene(id).then((scene) => new SceneSession(scene, (changed, immediate) => scheduleSave(id, changed, immediate)));
+    session = Promise.all([loadInitialScene(id), loadLinkAccess()]).then(([scene, access]) => {
+      const created = new SceneSession(scene, (changed, immediate) => scheduleSave(id, changed, immediate));
+      created.linkAccess = access[id] ?? "edit";
+      return created;
+    });
     sessions.set(id, session);
   }
   return session;
@@ -182,6 +186,32 @@ async function setProjectUser(id: string, userId: string | null) {
   await mkdir(DATA_ROOT, { recursive: true });
   await writeFile(PROJECT_USERS_FILE + ".tmp", JSON.stringify(map, null, 2));
   await rename(PROJECT_USERS_FILE + ".tmp", PROJECT_USERS_FILE);
+}
+
+// ---------- Link access: "edit" (default) or "view"; only owners can change it ----------
+const LINK_ACCESS_FILE = resolve(DATA_ROOT, "link-access.json");
+let linkAccess: Record<string, LinkAccess> | null = null;
+async function loadLinkAccess() {
+  if (linkAccess) return linkAccess;
+  try {
+    linkAccess = JSON.parse(await readFile(LINK_ACCESS_FILE, "utf8")) as Record<string, LinkAccess>;
+  } catch {
+    linkAccess = {};
+  }
+  return linkAccess;
+}
+async function setLinkAccess(id: string, access: LinkAccess | null) {
+  const map = await loadLinkAccess();
+  if (access === "view") map[id] = "view";
+  else delete map[id];
+  await mkdir(DATA_ROOT, { recursive: true });
+  await writeFile(LINK_ACCESS_FILE + ".tmp", JSON.stringify(map, null, 2));
+  await rename(LINK_ACCESS_FILE + ".tmp", LINK_ACCESS_FILE);
+}
+/** Owner = the signed-in account that created the project, or whoever holds its owner key. */
+async function ownsProject(id: string, user: { id: string } | null, key: string | undefined) {
+  if (user && (await loadProjectUsers())[id] === user.id) return true;
+  return isOwner(id, key);
 }
 
 const sceneExists = (id: string) => sessions.has(id) || existsSync(scenePath(id));
@@ -284,6 +314,18 @@ app.patch("/api/projects/:id", async (request, response) => {
   response.json({ ok: true });
 });
 
+app.put("/api/projects/:id/access", async (request, response) => {
+  const id = request.params.id;
+  if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
+  const access = (request.body as { linkAccess?: unknown } | undefined)?.linkAccess;
+  if (access !== "edit" && access !== "view") return response.status(400).json({ error: "linkAccess must be \"edit\" or \"view\"." });
+  if (!sceneExists(id)) return response.status(404).json({ error: "Project not found." });
+  if (!(await ownsProject(id, await accounts.userFor(request), request.get("x-owner-key")))) return response.status(403).json({ error: "Only the project owner can change link access." });
+  await setLinkAccess(id, access);
+  (await getSession(id)).setLinkAccess(access);
+  response.json({ linkAccess: access });
+});
+
 app.delete("/api/projects/:id", async (request, response) => {
   const id = request.params.id;
   if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
@@ -297,6 +339,7 @@ app.delete("/api/projects/:id", async (request, response) => {
   if (live) (await live).closeAll({ type: "project-deleted" });
   await setOwner(id, null);
   await setProjectUser(id, null);
+  await setLinkAccess(id, null);
   await accounts.forgetProject(id);
   await unlink(scenePath(id)).catch(() => undefined);
   await unlink(thumbPath(id)).catch(() => undefined);
@@ -357,6 +400,16 @@ app.get("/api/scenes/:id", async (request, response) => {
 const newId = () => "ai-" + randomUUID().slice(0, 8);
 
 /** LAN addresses so the Share dialog can offer links other devices can open. */
+/**
+ * The public address people should use to open projects (e.g. the Cloudflare tunnel started by `npm run share`).
+ * Set RB_PUBLIC_URL, or `npm run share` writes it to RB_DATA_DIR/public-url.txt once the tunnel is reachable.
+ */
+app.get("/api/public-url", async (_request, response) => {
+  let url = process.env.RB_PUBLIC_URL?.trim() || null;
+  if (!url) url = (await readFile(resolve(DATA_ROOT, "public-url.txt"), "utf8").catch(() => "")).trim() || null;
+  response.json({ url: url && /^https?:\/\/[^\s/]+$/.test(url.replace(/\/$/, "")) ? url.replace(/\/$/, "") : null });
+});
+
 app.get("/api/network", (_request, response) => {
   const addresses = Object.values(networkInterfaces()).flat()
     .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
@@ -458,7 +511,9 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     },
     close: () => socket.close(4000, "Replaced by a newer connection from the same tab"),
   };
-  const ready = getSession(sceneId).then((session) => {
+  const ownerKey = url.searchParams.get("key") ?? undefined;
+  const ready = Promise.all([getSession(sceneId), accounts.userFromCookie(request.headers.cookie).catch(() => null)]).then(async ([session, user]) => {
+    handle.owner = await ownsProject(sceneId, user, ownerKey);
     session.connect(handle);
     return session;
   });

@@ -1,12 +1,12 @@
 import { memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Edges, GizmoHelper, GizmoViewport, Grid, Html, Line, OrbitControls, OrthographicCamera, PerspectiveCamera, TransformControls } from "@react-three/drei";
-import { CanvasTexture, MOUSE, NearestFilter, Plane, Raycaster, Shape, SRGBColorSpace, Vector2, Vector3, type Group, type Object3D } from "three";
+import { CanvasTexture, Color, MOUSE, OrthographicCamera as ThreeOrthographicCamera, PerspectiveCamera as ThreePerspectiveCamera, NearestFilter, Plane, Raycaster, Shape, SRGBColorSpace, Vector2, Vector3, type Group, type Object3D } from "three";
 import type { FurnitureObject, FurniturePatch, Room, Scene, ValidationIssue } from "@reality-builder/shared";
 import type { SunStudy } from "@reality-builder/spatial-engine";
 import { useWorkspaceStore, type TransformTool } from "../store/workspace";
 import { usePerfStore, viewportBridge } from "../lib/perf";
-import { useContextMenu } from "../lib/ui";
+import { useContextMenu, useExportPdf } from "../lib/ui";
 import { FurnitureModel } from "./viewport/FurnitureModel";
 import { CutoutModel, isCutout } from "./viewport/CutoutModel";
 import { ImportedModel, importedModelUrl, ModelBoundary } from "./viewport/ImportedModel";
@@ -97,7 +97,8 @@ const FurnitureItem = memo(function FurnitureItem({
         </mesh>
       ) : null}
       {peerName && !selected ? (
-        <Html position={[0, height + 0.15, 0]} center distanceFactor={10} zIndexRange={[10, 0]}>
+        // Fixed pixel size (no distanceFactor): a distance-scaled tag grows without bound when zoomed in or in top view.
+        <Html position={[0, height + 0.15, 0]} center zIndexRange={[10, 0]}>
           <div className="peer-tag" style={{ background: peerColor ?? "#555" }}>{peerName}</div>
         </Html>
       ) : null}
@@ -355,8 +356,52 @@ function CaptureBridge() {
       canvas.getContext("2d")!.drawImage(source, 0, 0, canvas.width, canvas.height);
       return canvas.toDataURL(type, 0.82);
     };
+    viewportBridge.renderView = (view, width, height) => {
+      const exportCamera = view.kind === "ortho"
+        ? new ThreeOrthographicCamera(-view.halfWidth, view.halfWidth, view.halfHeight, -view.halfHeight, 0.05, 600)
+        : new ThreePerspectiveCamera(view.fov, width / height, 0.05, 600);
+      exportCamera.position.set(...view.position);
+      exportCamera.up.set(...(view.up ?? [0, 1, 0]));
+      exportCamera.lookAt(...view.target);
+      exportCamera.updateProjectionMatrix();
+      exportCamera.updateMatrixWorld();
+
+      // Cut the walls facing this camera (the editor's cutaway follows the main camera, not this one).
+      const walls: { object: Object3D; scale: number }[] = [];
+      const local = new Vector3();
+      scene.traverse((object) => {
+        const wall = object.userData.cutawayWall as { normal: [number, number]; half: number; cutaway: number } | undefined;
+        const roomGroup = object.parent?.parent;
+        if (!wall || !roomGroup) return;
+        walls.push({ object, scale: object.scale.y });
+        local.copy(exportCamera.position);
+        roomGroup.worldToLocal(local);
+        const facing = local.x * wall.normal[0] + local.z * wall.normal[1] > wall.half;
+        object.scale.y = facing ? (view.walls === "remove" ? 0.0001 : wall.cutaway) : 1;
+      });
+      const background = scene.background;
+      const fog = scene.fog;
+      scene.background = new Color(view.background);
+      scene.fog = null;
+      const size = gl.getSize(new Vector2());
+      const pixelRatio = gl.getPixelRatio();
+      try {
+        gl.setPixelRatio(1);
+        gl.setSize(width, height, false);
+        gl.render(scene, exportCamera);
+        return gl.domElement.toDataURL("image/jpeg", 0.92);
+      } finally {
+        gl.setPixelRatio(pixelRatio);
+        gl.setSize(size.x, size.y, false);
+        scene.background = background;
+        scene.fog = fog;
+        for (const wall of walls) wall.object.scale.y = wall.scale;
+        gl.render(scene, camera);
+      }
+    };
     return () => {
       viewportBridge.capture = null;
+      viewportBridge.renderView = null;
     };
   }, [gl, scene, camera]);
   return null;
@@ -416,6 +461,9 @@ export function SceneViewport() {
   const recovery = useWorkspaceStore((state) => state.recovery);
   const optimization = useWorkspaceStore((state) => state.optimization);
   const sun = useWorkspaceStore((state) => state.sun);
+  // While a design PDF is rendered, editor overlays (grid, gizmos, issue highlights, cursors) are hidden.
+  const exporting = useExportPdf((state) => state.capturing);
+  const canEdit = useWorkspaceStore((state) => state.access.canEdit);
   const { selectEntity, dispatch } = useWorkspaceStore.getState();
 
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
@@ -513,11 +561,11 @@ export function SceneViewport() {
         if (event.button === 0 && !editingMesh) selectEntity("");
       }}
     >
-      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} plan={viewMode !== "perspective" && viewMode !== "walk"} />
+      <SceneEnvironment mode={scene.environment.mode} room={room ?? scene.rooms[0]!} shadows={shadows} plan={exporting || (viewMode !== "perspective" && viewMode !== "walk")} />
       {room ? (
         <>
           <Grid
-            visible={showGrid}
+            visible={showGrid && !exporting}
             args={[60, 60]}
             position={[room.position.x, room.position.y - 0.125, room.position.z]}
             cellSize={gridSize}
@@ -548,30 +596,30 @@ export function SceneViewport() {
           <FurnitureItem
             key={item.id}
             item={item}
-            selected={item.id === selectedId}
-            severity={severityById.get(item.id) ?? null}
-            peerColor={peer?.color ?? null}
-            peerName={peer?.name ?? null}
+            selected={!exporting && item.id === selectedId}
+            severity={exporting ? null : severityById.get(item.id) ?? null}
+            peerColor={exporting ? null : peer?.color ?? null}
+            peerName={exporting ? null : peer?.name ?? null}
             lowDetail={lowDetail}
             shadows={shadows}
             lightScale={lightScale}
             groupRef={item.id === selectedId ? setSelectedGroup : undefined}
             onSelect={selectEntity}
-            draggable={(tool === "select" || tool === "translate" || tool === "rotate") && !(viewMode === "walk" && walkMode === "view")}
+            draggable={canEdit && (tool === "select" || tool === "translate" || tool === "rotate") && !(viewMode === "walk" && walkMode === "view")}
           />
         );
       })}
-      {zones.map((entry, index) => <FloorZone key={index} polygon={entry.zone} color={entry.color} />)}
-      {showRoutes ? validation?.routes.map((route) => (
+      {exporting ? null : zones.map((entry, index) => <FloorZone key={index} polygon={entry.zone} color={entry.color} />)}
+      {showRoutes && !exporting ? validation?.routes.map((route) => (
         <Line key={route.targetId} points={route.points.map(([x, z]) => [x, 0.03, z] as [number, number, number])} color="#3b82d9" lineWidth={2} transparent opacity={0.8} />
       )) : null}
-      {previewCandidate ? <RecoveryPreview moves={previewCandidate.moves} scene={scene} /> : null}
-      {optimization.preview && optimization.result ? (
+      {previewCandidate && !exporting ? <RecoveryPreview moves={previewCandidate.moves} scene={scene} /> : null}
+      {optimization.preview && optimization.result && !exporting ? (
         <RecoveryPreview scene={scene} moves={optimization.result.moves.map((move) => ({ objectId: move.objectId, from: { x: move.from[0], z: move.from[1] }, to: { x: move.to[0], z: move.to[1], yawDegrees: move.yawTo } }))} />
       ) : null}
-      {sun.overlay && sun.result && room ? <SunOverlay study={sun.result} room={room} /> : null}
-      {selectedItem && selectedGroup && !editingMesh && tool !== "scale" ? <SelectionHandles key={selectedItem.id + ":" + selectedItem.version} item={selectedItem} group={selectedGroup} /> : null}
-      {selectedItem && selectedGroup && !editingMesh && (tool === "translate" || tool === "rotate" || tool === "scale") && !selectedItem.constraints?.locked ? (
+      {sun.overlay && sun.result && room && !exporting ? <SunOverlay study={sun.result} room={room} /> : null}
+      {selectedItem && selectedGroup && !editingMesh && !exporting && canEdit && tool !== "scale" ? <SelectionHandles key={selectedItem.id + ":" + selectedItem.version} item={selectedItem} group={selectedGroup} /> : null}
+      {selectedItem && selectedGroup && !editingMesh && !exporting && canEdit && (tool === "translate" || tool === "rotate" || tool === "scale") && !selectedItem.constraints?.locked ? (
         <TransformControls
           object={selectedGroup as Object3D}
           mode={tool as Exclude<TransformTool, "select" | "vertex" | "face">}
@@ -592,14 +640,14 @@ export function SceneViewport() {
       <CameraRig scene={scene} selectedId={selectedId} room={room} />
       <DragController />
       <CaptureBridge />
-      {viewMode !== "walk" ? (
+      {viewMode !== "walk" && !exporting ? (
         <GizmoHelper alignment="bottom-left" margin={[64, 64]}>
           <GizmoViewport axisColors={["#e5483d", "#3fae5a", "#3b82d9"]} labelColor="#fff" />
         </GizmoHelper>
       ) : null}
       <PlacementController />
       <AnnotationController />
-      <PresenceCursors />
+      {exporting ? null : <PresenceCursors />}
       <PlacementGhost />
       <DropBridge />
       <PerfProbe />

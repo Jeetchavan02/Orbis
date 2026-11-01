@@ -1101,3 +1101,51 @@ details.inspector-block:not([open]) > summary::after { transform: rotate(-90deg)
 .shortcut-grid section > div { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12.5px; color: #3a3452; }
 .shortcut-grid kbd { min-width: 22px; padding: 2px 6px; border-radius: 5px; text-align: center; font-size: 11px; }
 @media (max-width: 1100px) { .shortcut-card { right: 16px; } }
+
+/* ---- Share channels and design PDF export */
+.share-channels { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.share-channels > button { flex: 1 1 180px; height: 34px; }
+.share-copied { margin: 8px 0 0; color: var(--accent-strong); font-size: 12px; }
+.whatsapp-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #25d366; color: #0b3d22; font-weight: 650; white-space: nowrap; transition: background-color 120ms; }
+.whatsapp-button:hover { background: #1ebe5b; }
+.avatar--online { position: relative; }
+.online-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #22a565; vertical-align: 1px; }
+.export-modal { width: min(880px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.export-modal h2 { display: inline-flex; align-items: center; gap: 8px; }
+.export-progress { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 12px 28px; text-align: center; color: var(--accent); }
+.export-progress strong { color: var(--ink); font-size: 15px; }
+.export-bar { width: min(360px, 100%); height: 6px; margin: 6px 0; overflow: hidden; border-radius: 3px; background: var(--accent-soft); }
+.export-bar span { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 200ms ease; }
+.export-ready { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; overflow-wrap: anywhere; }
+.export-preview { flex: 1 1 auto; width: 100%; min-height: 240px; height: 52vh; border: 1px solid var(--line-strong); border-radius: 8px; background: #f3f2f7; }
+.export-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.export-actions > button { height: 34px; }
+.export-note { margin: 10px 0 0; }
+@media (max-width: 1100px) { .topbar-export span { display: none; } }
+@media (max-width: 640px) {
+  .export-preview { height: 38vh; }
+  .export-actions > button { flex: 1 1 100%; }
+}
+
+/* ---- Link access (Can edit / Can view) */
+.share-access-text { flex: 1; min-width: 0; }
+.share-access-row { display: flex !important; align-items: center; justify-content: space-between; gap: 10px; flex-direction: row !important; flex-wrap: wrap; }
+.share-access-select { height: 30px; padding: 0 28px 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.share-access-select:disabled { cursor: not-allowed; opacity: 0.75; }
+.share-access-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.view-only-pill { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 12px; background: #fff4e0; color: #8a5a00; font-size: 12px; font-weight: 650; white-space: nowrap; }
+
+/* ---- Number field steppers (▲▼): also ↑/↓ keys, Shift ×10, Alt ÷10. They take the unit label's place on
+   hover/focus so the value never loses width. */
+.field-input { position: relative; }
+.field-steppers { position: absolute; top: 50%; right: 3px; display: flex; flex-direction: column; gap: 1px; transform: translateY(-50%); opacity: 0; pointer-events: none; transition: opacity 120ms; }
+.field-input:hover .field-steppers, .field-input:focus-within .field-steppers { opacity: 1; pointer-events: auto; }
+.field-input:hover em, .field-input:focus-within em { visibility: hidden; }
+.field-steppers button { display: grid; place-items: center; width: 18px; height: 11px; padding: 0; border: 0; border-radius: 3px; background: var(--surface, #fff); color: var(--ink-2); cursor: pointer; touch-action: none; }
+.field-steppers button:hover { background: var(--accent-soft); color: var(--accent); }
+.field-steppers button:active { background: var(--accent); color: #fff; }
+@media (pointer: coarse) {
+  .field-steppers { opacity: 1; pointer-events: auto; }
+  .field-input em { visibility: hidden; }
+  .field-steppers button { width: 22px; height: 12.5px; }
+}

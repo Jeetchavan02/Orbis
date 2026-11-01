@@ -33,6 +33,52 @@ export function NumberField({ label, value, onCommit, onBegin, min, max, step = 
     if (Math.abs(next - value) > 1e-9) onCommit(next);
   };
 
+  // Stepping (arrow keys or the ▲▼ buttons): a burst of steps commits as ONE action once the user pauses.
+  // Committing every step would send each one against the same base version before the server echoed the
+  // previous one, so the second step would be rejected as stale.
+  const [stepping, setStepping] = useState(false);
+  const pending = useRef<number | null>(null);
+  const flushTimer = useRef<number | null>(null);
+  const repeat = useRef<{ delay: number | null; interval: number | null }>({ delay: null, interval: null });
+  const latest = useRef({ value, onCommit });
+  latest.current = { value, onCommit };
+  const flush = () => {
+    if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+    flushTimer.current = null;
+    const next = pending.current;
+    pending.current = null;
+    setStepping(false);
+    if (next !== null && Math.abs(next - latest.current.value) > 1e-9) latest.current.onCommit(next);
+  };
+  const stepBy = (direction: 1 | -1, multiplier: number) => {
+    const current = pending.current ?? (focused && Number.isFinite(Number(draft)) ? Number(draft) : value);
+    const next = Number(clamp(current + direction * step * multiplier).toFixed(4));
+    if (pending.current === null) onBegin?.(); // base version for this burst
+    pending.current = next;
+    setDraft(format(next));
+    setStepping(true);
+    if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+    flushTimer.current = window.setTimeout(flush, 450);
+  };
+  const stopRepeat = () => {
+    if (repeat.current.delay !== null) window.clearTimeout(repeat.current.delay);
+    if (repeat.current.interval !== null) window.clearInterval(repeat.current.interval);
+    repeat.current = { delay: null, interval: null };
+  };
+  const startRepeat = (direction: 1 | -1, multiplier: number) => {
+    stopRepeat();
+    stepBy(direction, multiplier);
+    repeat.current.delay = window.setTimeout(() => {
+      repeat.current.interval = window.setInterval(() => stepBy(direction, multiplier), 70);
+    }, 380);
+  };
+  const multiplierFor = (event: { shiftKey: boolean; altKey: boolean }) => (event.shiftKey ? 10 : event.altKey ? 0.1 : 1);
+  // Commit a pending burst if the field unmounts (e.g. selection changes) instead of losing it.
+  useEffect(() => () => {
+    stopRepeat();
+    if (pending.current !== null) flush();
+  }, []);
+
   return (
     <label className={"field" + (disabled ? " field--disabled" : "")}>
       <span className="field-label">{label}</span>
@@ -41,7 +87,7 @@ export function NumberField({ label, value, onCommit, onBegin, min, max, step = 
           type="text"
           inputMode="decimal"
           aria-label={label}
-          value={focused ? draft : format(value)}
+          value={focused || stepping ? draft : format(value)}
           disabled={disabled}
           onChange={(event) => setDraft(event.target.value)}
           onFocus={(event) => {
@@ -53,25 +99,51 @@ export function NumberField({ label, value, onCommit, onBegin, min, max, step = 
           onMouseUp={(event) => event.preventDefault()}
           onBlur={() => {
             setFocused(false);
-            commit();
+            if (pending.current !== null) flush();
+            else commit();
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
+              if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+              pending.current = null;
+              setStepping(false);
               setDraft(format(value));
               event.currentTarget.blur();
             }
             if (event.key === "ArrowUp" || event.key === "ArrowDown") {
               event.preventDefault();
-              const next = clamp(Number(draft) + (event.key === "ArrowUp" ? step : -step) * (event.shiftKey ? 10 : 1));
-              if (Number.isFinite(next)) {
-                setDraft(format(next));
-                onCommit(Number(next.toFixed(4)));
-              }
+              stepBy(event.key === "ArrowUp" ? 1 : -1, multiplierFor(event));
             }
           }}
         />
         <em>{suffix}</em>
+        {!disabled ? (
+          <span className="field-steppers">
+            {([1, -1] as const).map((direction) => (
+              <button
+                key={direction}
+                type="button"
+                tabIndex={-1}
+                aria-label={(direction === 1 ? "Increase " : "Decrease ") + label}
+                title={`${direction === 1 ? "Increase" : "Decrease"} by ${step}${suffix === "°" ? "°" : " " + suffix} (Shift ×10, Alt ÷10, or use ↑↓)`}
+                onMouseDown={(event) => event.preventDefault()}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  if (event.button !== 0) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  startRepeat(direction, multiplierFor(event));
+                }}
+                onPointerUp={stopRepeat}
+                onPointerCancel={stopRepeat}
+                onLostPointerCapture={stopRepeat}
+                onClick={(event) => event.preventDefault()}
+              >
+                <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true"><path d={direction === 1 ? "M0.5 4.5 4 1l3.5 3.5" : "M0.5 0.5 4 4l3.5-3.5"} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </button>
+            ))}
+          </span>
+        ) : null}
       </span>
     </label>
   );

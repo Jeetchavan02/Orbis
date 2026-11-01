@@ -1,3 +1,4 @@
+import { ownerKeyFor } from "./project";
 import { ServerMessageSchema, type ClientMessage, type ServerMessage } from "@reality-builder/shared";
 
 /** "missing": the server says this project doesn't exist (bad link or deleted); no reconnect is attempted. */
@@ -108,7 +109,9 @@ export class CollabClient {
     this.closed = false;
     this.handlers.onState("connecting");
     const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${location.host}/ws?scene=${encodeURIComponent(this.sceneId)}`);
+    // The owner key (kept by the browser that created the project) lets the server recognise the owner.
+    const key = ownerKeyFor(this.sceneId);
+    const socket = new WebSocket(`${protocol}://${location.host}/ws?scene=${encodeURIComponent(this.sceneId)}${key ? "&key=" + encodeURIComponent(key) : ""}`);
     this.socket = socket;
 
     socket.addEventListener("open", () => {
