@@ -1,7 +1,9 @@
 import {
   AiPlanSchema,
   AiRoomExtractionSchema,
+  AiHouseExtractionSchema,
   applySceneAction,
+  parseSizeLabel,
   SceneActionError,
   SceneSchema,
   type AiCatalogItem,
@@ -12,6 +14,8 @@ import {
   type AiPlanAnalyzeRequest,
   type AiPlanAnalyzeResponse,
   type AiRoomExtraction,
+  type AiHouseAnalyzeResponse,
+  type MeasuredHouse,
   type PlanBuildSettings,
   type AiImageResponse,
   type AiToolCall,
@@ -462,7 +466,7 @@ async function extract(system: string, parts: Content["parts"]) {
   // Written dimensions win over the model's own estimate; scale its object positions to match.
   const written = (axis: "width" | "depth") => extraction.measurements.filter((entry) => entry.axis === axis && entry.meters >= 1 && entry.meters <= 40).sort((a, b) => b.meters - a.meters)[0];
   const corrections: string[] = [];
-  const sources = { width: "estimated" as "written" | "estimated", depth: "estimated" as "written" | "estimated" };
+  const sources = { width: "estimated" as "written" | "measured" | "estimated", depth: "estimated" as "written" | "measured" | "estimated" };
   // A room-size label ("17'-8\" X 17'-7\"") for the reconstructed room beats any other dimension, including the building's overall size.
   const own = extraction.planRooms.find((room) => room.name.toLowerCase() === extraction.roomName.toLowerCase() && room.label)?.label
     ?? extraction.measurements.find((entry) => parseSizeLabel(entry.label))?.label;
@@ -516,17 +520,33 @@ export function assembleRoom(source: AiRoomExtraction, catalog: AiCatalogItem[],
     if (!entry) continue;
     const yaw = ((Math.round(object.yawDegrees / 90) * 90) % 360 + 360) % 360;
     const rotated = yaw === 90 || yaw === 270;
-    const halfX = (rotated ? entry.dimensions.depth : entry.dimensions.width) / 2;
-    const halfZ = (rotated ? entry.dimensions.width : entry.dimensions.depth) / 2;
+    // Footprint measured from the plan (scaled with the room if the user corrects its size), else the catalog size.
+    const dimensions = object.width && object.depth
+      ? { width: fmt(object.width * (rotated ? sz : sx)), depth: fmt(object.depth * (rotated ? sx : sz)), height: entry.dimensions.height }
+      : entry.dimensions;
+    const halfX = (rotated ? dimensions.depth : dimensions.width) / 2;
+    const halfZ = (rotated ? dimensions.width : dimensions.depth) / 2;
     furniture.push({
       id: newId(), roomId, name: object.name || entry.name, category: entry.category, catalogItemId: entry.id,
       // Clamp into the room; the spatial engine reports anything still wrong.
       position: { x: fmt(Math.max(-halfW + halfX, Math.min(halfW - halfX, object.x * sx))), y: entry.elevation ?? 0, z: fmt(Math.max(-halfD + halfZ, Math.min(halfD - halfZ, object.z * sz))) },
-      yawDegrees: yaw, dimensions: entry.dimensions, color: object.color ?? entry.color,
+      yawDegrees: yaw, dimensions, color: object.color ?? entry.color,
       ...(entry.light ? { light: entry.light } : {}), ...(entry.constraints ? { constraints: entry.constraints } : {}), version: 1,
     });
   }
   const dropped = settings.furniture ? source.objects.length - furniture.length : 0;
+  // Interior walls, partitions and the solid blocks of an L-shape/notch: full-height, locked, collidable segments.
+  for (const wall of source.walls) {
+    // 1 cm inset so fixtures drawn flush against a partition touch it instead of overlapping by a rounding error.
+    const width = fmt(Math.max(0.03, Math.min(settings.width, wall.width * sx) - 0.02));
+    const depth = fmt(Math.max(0.03, Math.min(settings.depth, wall.depth * sz) - 0.02));
+    furniture.push({
+      id: newId(), roomId, name: "Wall", category: "other",
+      position: { x: fmt(Math.max(-halfW + width / 2, Math.min(halfW - width / 2, wall.x * sx))), y: 0, z: fmt(Math.max(-halfD + depth / 2, Math.min(halfD - depth / 2, wall.z * sz))) },
+      yawDegrees: 0, dimensions: { width, depth, height: settings.height }, color: source.wallColor ?? "#f1eee8",
+      constraints: { locked: true, frontClearance: 0 }, version: 1,
+    });
+  }
   const lighting = settings.lighting === "warm" ? { mode: "evening" as const, artificialLightScale: 1.2 } : settings.lighting === "neutral" ? { mode: "day" as const, artificialLightScale: 0.8 } : { mode: "day" as const, artificialLightScale: 1 };
   const scene = SceneSchema.parse({
     schemaVersion: 1,
@@ -558,7 +578,8 @@ export function assembleRoom(source: AiRoomExtraction, catalog: AiCatalogItem[],
   // Let the engine tidy the AI's placement: apply the best recovery candidate a few times while it helps.
   let tidy = scene;
   let fixedBy = 0;
-  for (let round = 0; round < 3; round += 1) {
+  // Measured plans are reproduced exactly as drawn; the engine still reports any issue, but nothing is moved.
+  for (let round = 0; round < (source.measured ? 0 : 3); round += 1) {
     const best = generateRecoveryCandidates(tidy, 1).candidates[0];
     if (!best || best.issuesAfter >= best.issuesBefore) break;
     tidy = applySceneAction(tidy, best.action).scene;
@@ -580,9 +601,15 @@ Respond with JSON only:
  "roomName":string,"source":"floor-plan"|"sketch"|"photo",
  "measurements":[{"label":string,"meters":number,"axis":"width"|"depth"|"other"}],
  "width":number,"depth":number,"height":number,"floorColor":"#rrggbb","wallColor":"#rrggbb",
- "openings":[{"kind":"door"|"window","wall":"north"|"south"|"east"|"west","offset":number,"width":number,"hinge":"left"|"right","swing":"in"|"out","confidence":number}],
- "objects":[{"catalogItemId":string,"name":string,"x":number,"z":number,"yawDegrees":number,"confidence":number}],
+ "roomBox":[ymin,xmin,ymax,xmax],
+ "walls":[{"box":[ymin,xmin,ymax,xmax]}],
+ "openings":[{"kind":"door"|"window","wall":"north"|"south"|"east"|"west","offset":number,"width":number,"hinge":"left"|"right","swing":"in"|"out","confidence":number,"box":[ymin,xmin,ymax,xmax]}],
+ "objects":[{"catalogItemId":string,"name":string,"x":number,"z":number,"yawDegrees":number,"confidence":number,"box":[ymin,xmin,ymax,xmax]}],
  "notes":string}
+BOXES: every box is [ymin, xmin, ymax, xmax] on THIS image, each normalized 0-1000 (0,0 = top-left). Be precise to the drawn lines; the editor measures the 3D room from these boxes.
+ roomBox = the reconstructed room's interior bounding rectangle: from the INNER face of its left wall to the inner face of its right wall, and from the inner face of its top wall to the inner face of its bottom wall (do not include wall thickness).
+ walls = wall material INSIDE roomBox: interior partitions and dividers, wall stubs, and solid wall blocks that make the room non-rectangular (an L-shape or notch: box the filled area that is not floor). Not the four outer walls. [] if none.
+ openings[].box = the gap in the wall (door leaf width or window length). objects[].box = the fixture's drawn outline (e.g. the whole bathtub, basin counter, toilet, bed).
 STEP 1. isRoomPlan=false if the image is not a room, plan or sketch at all (then width=depth=3 and empty lists).
 STEP 2. If the image shows MORE THAN ONE room (a flat or house plan), planRooms MUST list every labelled room: name = its label text (e.g. "Bedroom", "Kitchen"), label = its size text exactly as written (e.g. 17'-8" X 17'-7"), or "" if none. For a single-room plan planRooms = [].
 STEP 3. Pick the room to reconstruct: the one named in Focus, otherwise the living room (or the largest room). roomName = its name.
@@ -591,27 +618,12 @@ STEP 3. Pick the room to reconstruct: the one named in Focus, otherwise the livi
  measurements = only the label(s) that belong to that room.
 STEP 4. Coordinates in meters relative to THAT room's center: x along width (left-right), z along depth (top of the image = north = -Z). yawDegrees 0 = object front faces +Z (down the image).
  openings: doors (gap with an arc) and windows (thin double/triple lines in a wall) on that room's own walls only; offset = center along the wall from the wall midpoint; give hinge/swing when an arc is drawn.
- objects: only furniture actually drawn inside that room, mapped to the closest catalogItemId from the provided catalog; do not invent furniture. Sizes come from the catalog.
+ objects: only furniture actually drawn inside that room, mapped to the closest catalogItemId from the provided catalog; do not invent furniture. Their real size is measured from the box.
  confidence 0–1 per opening and object (1 = clearly drawn, 0.4 = guessed).
 height = 2.8 unless stated. In notes, say briefly what was uncertain.`;
 
-/** Parses a room-size label such as 17'-8" X 17'-7", 4.2 x 3.6 m, 3600 x 4000 mm. Returns [first, second] in meters. */
-export function parseSizeLabel(label: string): [number, number] | null {
-  const parts = label.replace(/[″“”]/g, '"').replace(/[′‘’]/g, "'").split(/\s*[x×X*]\s*/);
-  if (parts.length !== 2) return null;
-  const mm = /mm/i.test(label);
-  const cm = !mm && /cm/i.test(label);
-  const one = (text: string) => {
-    const feet = text.match(/(\d+(?:\.\d+)?)\s*'\s*-?\s*(?:(\d+(?:\.\d+)?)\s*"?)?/);
-    if (feet) return Number(feet[1]) * 0.3048 + Number(feet[2] ?? 0) * 0.0254;
-    const number = text.match(/(\d+(?:\.\d+)?)/);
-    if (!number) return NaN;
-    const value = Number(number[1]);
-    return mm ? value / 1000 : cm ? value / 100 : value;
-  };
-  const [a, b] = [one(parts[0]!), one(parts[1]!)];
-  return a >= 1 && a <= 40 && b >= 1 && b <= 40 ? [Math.round(a * 100) / 100, Math.round(b * 100) / 100] : null;
-}
+
+export { parseSizeLabel };
 
 export async function runPlanAnalyze(request: AiPlanAnalyzeRequest): Promise<AiPlanAnalyzeResponse> {
   const focus = request.focusRoom ? `Focus: reconstruct the room labelled "${request.focusRoom}".\n` : "";
@@ -619,4 +631,72 @@ export async function runPlanAnalyze(request: AiPlanAnalyzeRequest): Promise<AiP
     { inlineData: { mimeType: request.mimeType, data: request.imageBase64 } },
     { text: focus + "Catalog:\n" + catalogText(request.catalog) },
   ]);
+}
+
+// ---------------------------------------------------------------- whole floor plans ----------
+
+const HOUSE_SYSTEM = `You read a 2D FLOOR PLAN of a whole house or flat for a 3D editor. The editor measures all geometry from the
+image pixels itself; your job is to say WHAT is WHERE. Respond with JSON only:
+{"isRoomPlan":boolean,"name":string,
+ "overall":[{"label":string,"meters":number,"axis":"width"|"depth"}],
+ "rooms":[{"name":string,"label":string,"box":[ymin,xmin,ymax,xmax],
+   "objects":[{"catalogItemId":string,"name":string,"box":[ymin,xmin,ymax,xmax],"yawDegrees":number}]}],
+ "notes":string}
+Boxes are [ymin, xmin, ymax, xmax] on THIS image, normalized 0-1000 (0,0 = top-left). Be precise to the drawn lines.
+- overall: the dimension lines around the whole building (e.g. "15.00 m" along the top = width, "10.00 m" down the side = depth), in meters. [] if none.
+- rooms: EVERY labelled space (bedrooms, toilets, kitchen, utility, dining, living, porch, balcony...). name = its label text in Title Case.
+  label = its size text exactly as written ("3.60 x 3.30 m"), "" if none.
+  box = that room's interior: from the inner face of the wall on its left to the inner face of the wall on its right, and inner face of the top wall to inner face of the bottom wall. Where two spaces are open to each other (no wall, e.g. dining and living), split them where the plan's labels and furniture suggest, so the two boxes touch but don't overlap.
+- objects: furniture and fixtures drawn inside that room (beds, wardrobes, sofas, tables, chairs, toilets, basins, showers, kitchen counters, hobs, sinks, washing machines), each mapped to the closest catalogItemId in the catalog. box = the drawn outline of that piece. yawDegrees: 0 = the piece's front faces DOWN the image, 90 = faces right, 180 = faces up, 270 = faces left (a bed's front is its foot end). Do not invent pieces; skip plants and rugs.
+- isRoomPlan=false if the image is not a floor plan.`;
+
+export async function runHouseAnalyze(request: AiPlanAnalyzeRequest): Promise<AiHouseAnalyzeResponse> {
+  const { text, model } = await generateJson(HOUSE_SYSTEM, [{ role: "user", parts: [
+    { inlineData: { mimeType: request.mimeType, data: request.imageBase64 } },
+    { text: "Catalog:\n" + catalogText(request.catalog) },
+  ] }], { thinkingBudget: 1024, timeoutMs: 90_000 });
+  const parsed = AiHouseExtractionSchema.safeParse(JSON.parse(text));
+  if (!parsed.success) {
+    console.error("Floor plan answer did not match the schema:", text.slice(0, 1500));
+    throw new Error("The AI's answer for this plan was malformed; please try again.");
+  }
+  return { extraction: parsed.data, model };
+}
+
+/** Deterministic build of a measured whole plan: one room per space, openings on both sides of shared walls. */
+export function assembleHouse(house: MeasuredHouse, catalog: AiCatalogItem[], newId: () => string): AiImageResponse {
+  const rooms: Room[] = [];
+  const furniture: FurnitureObject[] = [];
+  let skipped = 0;
+  for (const source of house.rooms) {
+    const roomId = newId();
+    rooms.push({
+      id: roomId, name: source.name, position: { x: fmt(source.x), y: 0, z: fmt(source.z) }, yawDegrees: 0,
+      dimensions: { width: fmt(source.width), depth: fmt(source.depth), height: house.height, wallThickness: fmt(source.wallThickness) },
+      floorColor: /toilet|bath|utility|wash|porch|balcony/i.test(source.name) ? "#d9d6cf" : /kitchen/i.test(source.name) ? "#cfc6b8" : "#c8ab86",
+      wallColor: "#f1eee8",
+      openings: source.openings.map((opening) => {
+        const length = opening.wall === "north" || opening.wall === "south" ? source.width : source.depth;
+        const width = fmt(Math.max(0.3, Math.min(opening.width, length - 0.1)));
+        const offset = fmt(Math.max(-length / 2 + width / 2, Math.min(length / 2 - width / 2, opening.offset)));
+        // A passage is an open side (no wall drawn): an opening up to just under the ceiling.
+        const height = opening.kind === "window" ? Math.min(1.3, house.height - 1.1) : opening.kind === "passage" ? house.height - 0.05 : Math.min(2.1, house.height - 0.2);
+        return { id: newId(), kind: opening.kind === "window" ? "window" as const : "door" as const, wall: opening.wall, offset, width, height, sillHeight: opening.kind === "window" ? 0.9 : 0, hinge: "left" as const, swing: "in" as const };
+      }),
+      version: 1,
+    });
+    for (const object of source.objects) {
+      const entry = catalog.find((item) => item.id === object.catalogItemId);
+      if (!entry) { skipped += 1; continue; }
+      furniture.push({
+        id: newId(), roomId, name: object.name || entry.name, category: entry.category, catalogItemId: entry.id,
+        position: { x: fmt(source.x + object.x), y: entry.elevation ?? 0, z: fmt(source.z + object.z) },
+        yawDegrees: object.yawDegrees, dimensions: { width: fmt(object.width), depth: fmt(object.depth), height: entry.dimensions.height },
+        color: entry.color, ...(entry.light ? { light: entry.light } : {}), ...(entry.constraints ? { constraints: entry.constraints } : {}), version: 1,
+      });
+    }
+  }
+  const scene = SceneSchema.parse({ schemaVersion: 1, id: "scene-house-" + newId(), name: house.name, coordinateSystem: "y-up-xz-meters", rooms, furniture, environment: { mode: "day", artificialLightScale: 1 } });
+  const notes = `${rooms.length} rooms, ${furniture.length} pieces measured from the plan.` + (skipped ? ` ${skipped} piece${skipped === 1 ? "" : "s"} without a catalog match were skipped.` : "");
+  return { scene, notes, issues: validateScene(scene).issues, model: "engine" };
 }

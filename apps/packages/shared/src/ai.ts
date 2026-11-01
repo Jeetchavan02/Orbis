@@ -75,6 +75,17 @@ export const AiEditResponseSchema = z.object({
 });
 
 /** Structured room extraction from a photo (approximate). */
+/** A box on the uploaded image: [ymin, xmin, ymax, xmax], each 0–1000 of the image height/width (Gemini's native format). */
+/** Models sometimes answer a box as {ymin,…}, as two [y,x] corners, or with numeric strings; all mean the same box. */
+export const ImageBoxSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const box = value as Record<string, unknown>;
+    value = [box.ymin ?? box.y0 ?? box.top, box.xmin ?? box.x0 ?? box.left, box.ymax ?? box.y1 ?? box.bottom, box.xmax ?? box.x1 ?? box.right];
+  }
+  return Array.isArray(value) ? value.flat(2).map((entry) => (typeof entry === "string" ? Number(entry) : entry)) : value;
+}, z.tuple([z.number(), z.number(), z.number(), z.number()]));
+export type ImageBox = z.infer<typeof ImageBoxSchema>;
+
 export const AiRoomExtractionSchema = z.object({
   roomName: z.string().default("Reconstructed room"),
   source: z.enum(["photo", "sketch", "floor-plan"]).default("photo"),
@@ -91,6 +102,23 @@ export const AiRoomExtractionSchema = z.object({
   width: z.number().min(1).max(40),
   depth: z.number().min(1).max(40),
   height: z.number().min(2).max(5).default(2.7),
+  /** Plan images: the room's interior (inner faces of its outer walls) on the image. Drives pixel-exact geometry. */
+  roomBox: ImageBoxSchema.optional(),
+  /**
+   * Interior walls, partitions, and wall blocks that make the room non-rectangular (notches, L-shapes), in meters
+   * relative to the room center. Built as solid, locked wall segments. `box` is where they are on the image.
+   */
+  walls: z.array(z.preprocess(
+    // Models sometimes return a bare box instead of { box }.
+    (value) => (Array.isArray(value) ? { box: value } : value),
+    z.object({
+      x: z.number().default(0), z: z.number().default(0),
+      width: z.number().positive().default(0.1), depth: z.number().positive().default(0.1),
+      box: ImageBoxSchema.optional(),
+    }),
+  )).max(40).default([]),
+  /** True once the browser has measured the geometry from the image pixels (see web/src/lib/planGeometry.ts). */
+  measured: z.boolean().default(false),
   floorColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   wallColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   openings: z.array(z.object({
@@ -101,6 +129,7 @@ export const AiRoomExtractionSchema = z.object({
     hinge: z.enum(["left", "right"]).optional(),
     swing: z.enum(["in", "out"]).optional(),
     confidence: z.number().min(0).max(1).default(0.7),
+    box: ImageBoxSchema.optional(),
   })).max(12).default([]),
   objects: z.array(z.object({
     catalogItemId: z.string(),
@@ -111,9 +140,62 @@ export const AiRoomExtractionSchema = z.object({
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
     /** 0–1: how sure the model is about this piece (drawn clearly vs. inferred). */
     confidence: z.number().min(0).max(1).default(0.7),
+    box: ImageBoxSchema.optional(),
+    /** Footprint measured from the plan (object-local width × depth, meters); otherwise the catalog size is used. */
+    width: z.number().positive().optional(),
+    depth: z.number().positive().optional(),
   })).max(40),
   notes: z.string().default(""),
 });
+
+/** Whole floor plan (house/flat), step 1: what the AI reads. Geometry is then measured from the pixels in the browser. */
+export const AiHouseExtractionSchema = z.object({
+  isRoomPlan: z.boolean().default(true),
+  name: z.string().default("Floor plan"),
+  /** Overall dimension lines (e.g. "15.00 m" across the whole building), converted to meters. */
+  overall: z.array(z.object({ label: z.string(), meters: z.number().positive(), axis: z.enum(["width", "depth"]) })).max(4).default([]),
+  rooms: z.array(z.object({
+    name: z.string(),
+    /** Size text exactly as written, e.g. "3.60 x 3.30 m" or 12'-0" x 10'-6"; "" if none. */
+    label: z.string().default(""),
+    /** Interior of the room on the image (inner wall faces). */
+    box: ImageBoxSchema,
+    objects: z.array(z.object({
+      catalogItemId: z.string(),
+      name: z.string().optional(),
+      box: ImageBoxSchema,
+      yawDegrees: z.number().default(0),
+    })).max(24).default([]),
+  })).min(1).max(30),
+  notes: z.string().default(""),
+});
+export const AiHouseAnalyzeResponseSchema = z.object({ extraction: AiHouseExtractionSchema, model: z.string() });
+
+/** Whole floor plan, step 2: measured geometry (meters, plan center = origin, -Z = top of the image). */
+export const MeasuredHouseSchema = z.object({
+  name: z.string().min(1).max(80),
+  height: z.number().min(2).max(6),
+  rooms: z.array(z.object({
+    name: z.string().min(1).max(80),
+    x: z.number(), z: z.number(),
+    width: z.number().min(0.3).max(60), depth: z.number().min(0.3).max(60),
+    wallThickness: z.number().min(0.05).max(0.6),
+    openings: z.array(z.object({
+      kind: z.enum(["door", "window", "passage"]),
+      wall: WallSideSchema,
+      offset: z.number(),
+      width: z.number().positive(),
+    })).max(24).default([]),
+    objects: z.array(z.object({
+      catalogItemId: z.string(), name: z.string().optional(),
+      x: z.number(), z: z.number(), width: z.number().positive(), depth: z.number().positive(), yawDegrees: z.number(),
+    })).max(24).default([]),
+  })).min(1).max(30),
+});
+export const AiHouseBuildRequestSchema = z.object({ house: MeasuredHouseSchema, catalog: z.array(AiCatalogItemSchema) });
+export type AiHouseExtraction = z.infer<typeof AiHouseExtractionSchema>;
+export type AiHouseAnalyzeResponse = z.infer<typeof AiHouseAnalyzeResponseSchema>;
+export type MeasuredHouse = z.infer<typeof MeasuredHouseSchema>;
 
 /** "Describe a room" → generated, furnished room. */
 export const AiBriefRequestSchema = z.object({
@@ -148,7 +230,8 @@ export const AiPlanAnalyzeRequestSchema = AiImageRequestSchema.extend({
 export const AiPlanAnalyzeResponseSchema = z.object({
   extraction: AiRoomExtractionSchema,
   /** Which of width/depth came from a dimension written on the image, versus estimated. */
-  sources: z.object({ width: z.enum(["written", "estimated"]), depth: z.enum(["written", "estimated"]) }),
+  /** written = a dimension on the plan; measured = derived from the plan's pixels at the written scale; estimated = guessed. */
+  sources: z.object({ width: z.enum(["written", "measured", "estimated"]), depth: z.enum(["written", "measured", "estimated"]) }),
   model: z.string(),
 });
 
@@ -174,3 +257,21 @@ export type AiPlanBuildRequest = z.infer<typeof AiPlanBuildRequestSchema>;
 export type AiRoomExtraction = z.infer<typeof AiRoomExtractionSchema>;
 export type AiImageRequest = z.infer<typeof AiImageRequestSchema>;
 export type AiImageResponse = z.infer<typeof AiImageResponseSchema>;
+
+/** Parses a room-size label such as 17'-8" X 17'-7", 4.2 x 3.6 m, 3600 x 4000 mm. Returns [first, second] in meters. */
+export function parseSizeLabel(label: string): [number, number] | null {
+  const parts = label.replace(/[″“”]/g, '"').replace(/[′‘’]/g, "'").split(/\s*[x×X*]\s*/);
+  if (parts.length !== 2) return null;
+  const mm = /mm/i.test(label);
+  const cm = !mm && /cm/i.test(label);
+  const one = (text: string) => {
+    const feet = text.match(/(\d+(?:\.\d+)?)\s*'\s*-?\s*(?:(\d+(?:\.\d+)?)\s*"?)?/);
+    if (feet) return Number(feet[1]) * 0.3048 + Number(feet[2] ?? 0) * 0.0254;
+    const number = text.match(/(\d+(?:\.\d+)?)/);
+    if (!number) return NaN;
+    const value = Number(number[1]);
+    return mm ? value / 1000 : cm ? value / 100 : value;
+  };
+  const [a, b] = [one(parts[0]!), one(parts[1]!)];
+  return a >= 1 && a <= 40 && b >= 1 && b <= 40 ? [Math.round(a * 100) / 100, Math.round(b * 100) / 100] : null;
+}

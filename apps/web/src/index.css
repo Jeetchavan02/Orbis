@@ -953,6 +953,8 @@ details.inspector-block:not([open]) > summary::after { transform: rotate(-90deg)
 .up-compare figure { position: relative; display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .up-compare img, .up-plan-svg { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; border: 1px solid var(--line); border-radius: 14px; background: #fafafa; }
 .up-compare figcaption { color: var(--muted); font-size: 12.5px; text-align: center; }
+.up-plan-wrap { position: relative; display: block; }
+.up-overlay { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); pointer-events: none; }
 .up-building { position: absolute; top: 10px; right: 10px; color: var(--accent-strong); }
 .is-building .up-plan-svg { opacity: .55; }
 .up-detected summary { cursor: pointer; font-size: 14px; font-weight: 600; }
@@ -1150,3 +1152,8 @@ details.inspector-block:not([open]) > summary::after { transform: rotate(-90deg)
   .field-input em { visibility: hidden; }
   .field-steppers button { width: 22px; height: 12.5px; }
 }
+
+.up-checks { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.up-checks th, .up-checks td { padding: 5px 4px; border-bottom: 1px solid var(--border, #e6e3ef); text-align: left; }
+.up-checks th { font-weight: 600; opacity: 0.7; }
+.up-check-bad { color: #c2410c; font-weight: 600; }

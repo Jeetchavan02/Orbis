@@ -7,8 +7,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
-import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
-import { AiQuotaError, AiUnavailableError, aiModel, assembleRoom, runAiEdit, runBriefToRoom, runImageToRoom, runPlanAnalyze } from "./ai.js";
+import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, AiHouseBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
+import { AiQuotaError, AiUnavailableError, aiModel, assembleRoom, runAiEdit, runBriefToRoom, runImageToRoom, runPlanAnalyze, runHouseAnalyze, assembleHouse } from "./ai.js";
 import { SceneSession, type ClientHandle } from "./sessions.js";
 import { Accounts } from "./auth.js";
 import { assetKey, createStorage, reportKey, sceneKey, thumbnailKey } from "./storage.js";
@@ -461,6 +461,27 @@ app.post("/api/ai/plan/analyze", async (request, response) => {
   } catch (error) {
     console.error("Plan analysis failed", error);
     response.status(error instanceof AiUnavailableError ? 503 : error instanceof AiQuotaError ? 429 : 502).json({ error: (error as Error).message });
+  }
+});
+
+app.post("/api/ai/plan/house", async (request, response) => {
+  const parsed = AiPlanAnalyzeRequestSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid request: " + parsed.error.issues[0]?.message });
+  try {
+    response.json(await runHouseAnalyze(parsed.data));
+  } catch (error) {
+    console.error("Floor plan analysis failed", error);
+    response.status(error instanceof AiUnavailableError ? 503 : error instanceof AiQuotaError ? 429 : 502).json({ error: (error as Error).message });
+  }
+});
+
+app.post("/api/ai/plan/house/build", (request, response) => {
+  const parsed = AiHouseBuildRequestSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid request: " + parsed.error.issues[0]?.message });
+  try {
+    response.json(assembleHouse(parsed.data.house, parsed.data.catalog, newId));
+  } catch (error) {
+    response.status(400).json({ error: (error as Error).message });
   }
 });
 
