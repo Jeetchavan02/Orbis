@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ProductRefSchema } from "./commerce.js";
 
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
@@ -19,7 +20,8 @@ export const WallSideSchema = z.enum(["north", "south", "east", "west"]);
 
 export const OpeningSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["door", "window"]),
+  /** passage = an open doorway or archway: a gap in the wall with no door leaf (nothing swings). */
+  kind: z.enum(["door", "window", "passage"]),
   wall: WallSideSchema,
   /** Center of the opening along its wall, measured from the wall midpoint (room-local meters). */
   offset: z.number().finite(),
@@ -101,6 +103,8 @@ export const FurnitureObjectSchema = z.object({
   mesh: MeshDataSchema.optional(),
   constraints: ObjectConstraintsSchema.optional(),
   light: LightFixtureSchema.optional(),
+  /** Shopping reference (real linked listing or sample estimate); see commerce.ts. */
+  product: ProductRefSchema.optional(),
   version: z.number().int().nonnegative().default(1),
 });
 
@@ -243,6 +247,7 @@ const FurnitureUpdateSchema = z.object({
   mesh: MeshDataSchema.nullable().optional(),
   constraints: ObjectConstraintsSchema.nullable().optional(),
   light: LightFixtureSchema.nullable().optional(),
+  product: ProductRefSchema.nullable().optional(),
 });
 
 const SceneSettingsUpdateSchema = z.object({

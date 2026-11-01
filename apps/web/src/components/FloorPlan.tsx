@@ -64,7 +64,7 @@ function Symbol({ item }: { item: FurnitureObject }): ReactNode {
   }
 }
 
-type WallPiece = { kind: "solid" | "window" | "door"; from: number; to: number; opening?: Opening };
+type WallPiece = { kind: "solid" | "window" | "door" | "passage"; from: number; to: number; opening?: Opening };
 
 /** Splits a wall into solid runs and openings along its length (room-local, centred). */
 function wallPieces(length: number, openings: Opening[]): WallPiece[] {

@@ -146,7 +146,7 @@ function patchFurniture(item: FurnitureObject, patch: FurniturePatch) {
     inverse.position = pick(item.position, patch.position);
     next.position = { ...item.position, ...patch.position };
   }
-  for (const key of ["color", "constraints", "light"] as const) {
+  for (const key of ["color", "constraints", "light", "product"] as const) {
     if (patch[key] === undefined) continue;
     (inverse as Record<string, unknown>)[key] = item[key] ?? null;
     if (patch[key] === null) delete next[key];

@@ -394,7 +394,8 @@ function openingsOnSide(pixels: Pixels, rect: PxRect, side: "north" | "south" | 
   const vertical = side === "west" || side === "east";
   const outward = side === "south" || side === "east" ? 1 : -1;
   const face = { north: rect.y0, south: rect.y1, west: rect.x0, east: rect.x1 }[side];
-  const line = Math.round(face + outward * Math.max(2, thickness / 2));
+  // Sample just inside the wall: interior partitions are often thinner than the outer walls.
+  const line = Math.round(face + outward * Math.max(2, Math.min(thickness / 2, 5)));
   const [from, to] = vertical ? [rect.y0 + 2, rect.y1 - 2] : [rect.x0 + 2, rect.x1 - 2];
   const at = (i: number) => (vertical ? pixels.luminance[Math.round(i) * pixels.width + line]! : pixels.luminance[line * pixels.width + Math.round(i)]!);
   if (line < 0 || line >= (vertical ? pixels.width : pixels.height)) return [];
@@ -411,7 +412,20 @@ function openingsOnSide(pixels: Pixels, rect: PxRect, side: "north" | "south" | 
     }
   }
   const minimum = 0.45 / scale;
-  return runs.filter(([a, b]) => b - a >= minimum).map(([a, b]) => {
+  // A real gap is open straight through the wall: across the full thickness (and a little beyond) at its middle there
+  // is no solid wall. A "gap" that came from sampling beside the wall instead runs into the wall here.
+  const throughWall = (a: number, b: number) => [0.35, 0.5, 0.65].every((share) => {
+    const along = Math.round(a + (b - a) * share);
+    let run = 0;
+    for (let step = -2; step <= Math.round(thickness * 1.4) + 2; step += 1) {
+      const across = Math.round(face + outward * step);
+      const value = vertical ? pixels.luminance[along * pixels.width + across] : pixels.luminance[across * pixels.width + along];
+      run = value !== undefined && value < WALL_DARK ? run + 1 : 0;
+      if (run >= 3) return false;
+    }
+    return true;
+  });
+  return runs.filter(([a, b]) => b - a >= minimum && throughWall(a, b)).map(([a, b]) => {
     // Thin drawn lines inside the gap (window glazing) vs. an empty gap (door, open side).
     // Sample straight across the wall at a few points: glazing lines run along the wall, so they cross these samples.
     let lined = 0;
@@ -427,7 +441,8 @@ function openingsOnSide(pixels: Pixels, rect: PxRect, side: "north" | "south" | 
     }
     const lined2 = lined >= 2;
     const width = (b - a) * scale;
-    const kind: "door" | "window" | "passage" = exterior ? (lined2 ? "window" : "door") : width > 1.6 ? "passage" : "door";
+    // Doors are at most ~1.2 m; anything wider between rooms is an open passage.
+    const kind: "door" | "window" | "passage" = exterior ? (lined2 ? "window" : width > 1.2 ? "passage" : "door") : width > 1.2 ? "passage" : "door";
     const mid = (a + b) / 2;
     const rectPx: PxRect = vertical
       ? { x0: line - thickness / 2, x1: line + thickness / 2, y0: a, y1: b }
@@ -481,7 +496,7 @@ function roomFromWalls(mask: Uint8Array, pixels: Pixels, rough: PxRect, others: 
   const reachX = Math.max(width * 0.06, (rough.x1 - rough.x0) * 0.8);
   const reachY = Math.max(height * 0.06, (rough.y1 - rough.y0) * 0.8);
   const inside = (r: PxRect, x: number, y: number, margin: number) => x > r.x0 + margin && x < r.x1 - margin && y > r.y0 + margin && y < r.y1 - margin;
-  const claimed = (x: number, y: number) => !inside(rough, x, y, 0) && others.some((other) => inside(other, x, y, 4));
+  const claimed = (x: number, y: number) => !inside(rough, x, y, 0) && others.some((other) => inside(other, x, y, Math.max(4, wallPx * 2)));
   const cx = (rough.x0 + rough.x1) / 2;
   const cy = (rough.y0 + rough.y1) / 2;
   const side = (vertical: boolean, outward: 1 | -1) => {
@@ -492,6 +507,7 @@ function roomFromWalls(mask: Uint8Array, pixels: Pixels, rough: PxRect, others: 
     const reach = vertical ? reachX : reachY;
     const limit = edge + outward * reach;
     const hits: number[] = [];
+    const rayOf: number[] = [];
     const rays = 41;
     // Thin-line ink each escaping ray crossed (window glazing drawn inside a wall).
     const escapedInk: number[][] = [];
@@ -505,7 +521,7 @@ function roomFromWalls(mask: Uint8Array, pixels: Pixels, rough: PxRect, others: 
         const y = vertical ? along : at;
         if (x < 0 || y < 0 || x >= width || y >= height) break;
         if (claimed(x, y)) { escaped = true; break; }
-        if (mask[y * width + x]) { hits.push(outward > 0 ? at : at + 1); break; }
+        if (mask[y * width + x]) { hits.push(outward > 0 ? at : at + 1); rayOf.push(k); break; }
         if (pixels.luminance[y * width + x]! < LINE_INK && ink.length < 64) ink.push(at);
       }
       if (escaped) escapedInk.push(ink);
@@ -514,16 +530,20 @@ function roomFromWalls(mask: Uint8Array, pixels: Pixels, rough: PxRect, others: 
     }
     // Nearest wall a fifth of the rays agree on; failing that, a few aligned hits near the AI's edge (walls full of
     // windows only have short solid pieces; dark blobs inside the room, like lamps, are far from the edge).
-    hits.sort((a, b) => (a - b) * outward);
+    const order = hits.map((_, index) => index).sort((a, b) => (hits[a]! - hits[b]!) * outward);
     const span = vertical ? rough.x1 - rough.x0 : rough.y1 - rough.y0;
-    const cluster = (enough: (count: number, hit: number) => boolean) => {
-      for (const hit of hits) {
-        const near = hits.filter((other) => Math.abs(other - hit) <= 2);
-        if (enough(near.length, hit)) return median(near);
+    const cluster = (enough: (count: number, hit: number, spread: number) => boolean) => {
+      for (const index of order) {
+        const hit = hits[index]!;
+        const near = order.filter((other) => Math.abs(hits[other]! - hit) <= 2);
+        const raysHit = near.map((other) => rayOf[other]!);
+        if (enough(near.length, hit, Math.max(...raysHit) - Math.min(...raysHit))) return median(near.map((other) => hits[other]!));
       }
       return null;
     };
-    const wall = cluster((count) => count >= rays * 0.2) ?? cluster((count, hit) => count >= 3 && (hit - edge) * outward > -span * 0.15);
+    // Sparse hits only count when spread along the side like wall pieces between windows (a lamp or other dark blob
+    // is local).
+    const wall = cluster((count) => count >= rays * 0.2) ?? cluster((count, hit, spread) => count >= 3 && spread >= rays * 0.3 && (hit - edge) * outward > -span * 0.15);
     // Open to another room's space along a stretch wider than any door (doors are well under 8 wall thicknesses),
     // unless the rays that got through crossed glazing on the wall line: then it is a wall of windows.
     if (longest * ((to - from) / rays) > wallPx * 8) {
@@ -563,7 +583,25 @@ function meetOpenSides(found: { rough: PxRect; rect: PxRect; open: Record<"x0" |
       room.open[mine] = false;
     }
   }
-  return found.map((entry) => entry.rect);
+  // No two rooms may share floor: where they still overlap, the larger one gives way at the smaller one's face.
+  const rects = found.map((entry) => entry.rect);
+  const area = (r: PxRect) => (r.x1 - r.x0) * (r.y1 - r.y0);
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (const big of rects) {
+      for (const small of rects) {
+        if (big === small || area(big) < area(small)) continue;
+        const ox = Math.min(big.x1, small.x1) - Math.max(big.x0, small.x0);
+        const oy = Math.min(big.y1, small.y1) - Math.max(big.y0, small.y0);
+        if (ox <= 1 || oy <= 1) continue;
+        const cuts = [
+          { cost: big.x1 - small.x0, apply: () => { big.x1 = small.x0; } }, { cost: small.x1 - big.x0, apply: () => { big.x0 = small.x1; } },
+          { cost: big.y1 - small.y0, apply: () => { big.y1 = small.y0; } }, { cost: small.y1 - big.y0, apply: () => { big.y0 = small.y1; } },
+        ].filter((cut) => cut.cost > 0).sort((p, q) => p.cost - q.cost);
+        cuts[0]?.apply();
+      }
+    }
+  }
+  return rects;
 }
 
 export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtraction, height = 2.8): Promise<MeasuredHousePlan> {
@@ -596,7 +634,13 @@ export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtr
   };
   const [ox0, ox1] = profile(true);
   const [oy0, oy1] = profile(false);
-  const outer: PxRect = { x0: ox0, x1: ox1, y0: oy0, y1: oy1 };
+  // Photos and low-contrast scans may not show enough solid wall mass; then the outline is the measured rooms plus
+  // one wall thickness all round.
+  const union = { x0: Math.min(...rects.map((r) => r.x0)), y0: Math.min(...rects.map((r) => r.y0)), x1: Math.max(...rects.map((r) => r.x1)), y1: Math.max(...rects.map((r) => r.y1)) };
+  const fromMass: PxRect = { x0: ox0, x1: ox1, y0: oy0, y1: oy1 };
+  const covers = ox0 >= 0 && oy0 >= 0 && fromMass.x0 <= union.x0 + wallPx && fromMass.x1 >= union.x1 - wallPx && fromMass.y0 <= union.y0 + wallPx && fromMass.y1 >= union.y1 - wallPx
+    && fromMass.x1 - fromMass.x0 <= (union.x1 - union.x0) * 1.3 && fromMass.y1 - fromMass.y0 <= (union.y1 - union.y0) * 1.3;
+  const outer: PxRect = covers ? fromMass : { x0: union.x0 - wallPx, x1: union.x1 + wallPx, y0: union.y0 - wallPx, y1: union.y1 + wallPx };
 
   // Scale: overall dimension lines first (longest baseline), else the median of every room's written size.
   const labelled = extraction.rooms.map((room, index) => {
@@ -613,8 +657,14 @@ export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtr
   const fromLabels = labelled.filter((entry) => entry !== null);
   const overallWidth = extraction.overall.find((entry) => entry.axis === "width")?.meters;
   const overallDepth = extraction.overall.find((entry) => entry.axis === "depth")?.meters;
-  let sx = overallWidth ? overallWidth / (outer.x1 - outer.x0) : median(fromLabels.map((entry) => entry.sx));
-  let sz = overallDepth ? overallDepth / (outer.y1 - outer.y0) : median(fromLabels.map((entry) => entry.sz));
+  const labelSx = median(fromLabels.map((entry) => entry.sx));
+  const labelSz = median(fromLabels.map((entry) => entry.sz));
+  // The overall dimensions win unless they disagree wildly with the room labels (a misread number or outline).
+  const agrees = (overall: number, label: number) => !Number.isFinite(label) || Math.abs(Math.log(overall / label)) < 0.35;
+  const overallSx = overallWidth ? overallWidth / (outer.x1 - outer.x0) : NaN;
+  const overallSz = overallDepth ? overallDepth / (outer.y1 - outer.y0) : NaN;
+  let sx = Number.isFinite(overallSx) && agrees(overallSx, labelSx) ? overallSx : labelSx;
+  let sz = Number.isFinite(overallSz) && agrees(overallSz, labelSz) ? overallSz : labelSz;
   if (!Number.isFinite(sx) && Number.isFinite(sz)) sx = sz;
   if (!Number.isFinite(sz) && Number.isFinite(sx)) sz = sx;
   if (!Number.isFinite(sx)) {
@@ -623,6 +673,9 @@ export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtr
   }
   notes.push(`Scale ${(sx * 100).toFixed(3)} × ${(sz * 100).toFixed(3)} cm/px from ${overallWidth || overallDepth ? "the overall dimensions" : "the room labels"}; walls ${(thickness * sx * 100).toFixed(0)} cm.`);
 
+  // No room can be bigger than the building (or than the editor allows).
+  const buildingWidth = Math.min(60, Math.max(1, round((outer.x1 - outer.x0) * sx)));
+  const buildingDepth = Math.min(60, Math.max(1, round((outer.y1 - outer.y0) * sz)));
   const ox = (outer.x0 + outer.x1) / 2;
   const oy = (outer.y0 + outer.y1) / 2;
   const overlay: PlanOverlay = { imageWidth: pixels.width, imageHeight: pixels.height, room: outer, rooms: rects, walls: [], objects: [], openings: [], scale: { x: sx, z: sz } };
@@ -639,7 +692,13 @@ export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtr
     const openings: MeasuredHouse["rooms"][number]["openings"] = [];
     for (const side of ["north", "south", "west", "east"] as const) {
       const horizontal = side === "north" || side === "south";
-      for (const opening of openingsOnSide(pixels, rect, side, thickness, outer, horizontal ? sx : sz)) {
+      for (const found of openingsOnSide(pixels, rect, side, thickness, outer, horizontal ? sx : sz)) {
+        // An unglazed gap in an outside wall is only a door for rooms people enter from outside; elsewhere it is a
+        // window drawn without glazing lines.
+        const entry = /living|lounge|hall|foyer|entr|lobby|porch|veranda|balcony|terrace|garden|patio/i.test(source.name);
+        const opening = found.kind === "door" && Math.abs((side === "north" ? rect.y0 : side === "south" ? rect.y1 : side === "west" ? rect.x0 : rect.x1) - (side === "north" ? outer.y0 : side === "south" ? outer.y1 : side === "west" ? outer.x0 : outer.x1)) <= thickness * 1.6 + 4 && !entry
+          ? { ...found, kind: "window" as const }
+          : found;
         overlay.openings.push({ rect: opening.rect, kind: opening.kind === "window" ? "window" : "door" });
         openings.push({ kind: opening.kind, wall: side, offset: round(horizontal ? (opening.mid - cx) * sx : (opening.mid - cy) * sz), width: round(opening.width) });
       }
@@ -680,7 +739,7 @@ export async function measureHouse(imageDataUrl: string, extraction: AiHouseExtr
     });
 
     return {
-      name: source.name, x: round((cx - ox) * sx), z: round((cy - oy) * sz), width: Math.max(0.3, width), depth: Math.max(0.3, depth),
+      name: source.name, x: round((cx - ox) * sx), z: round((cy - oy) * sz), width: Math.min(buildingWidth, Math.max(0.3, width)), depth: Math.min(buildingDepth, Math.max(0.3, depth)),
       wallThickness: Math.min(0.6, Math.max(0.05, round(thickness * sx))), openings: openings.slice(0, 24), objects: objects.slice(0, 24),
     };
   });

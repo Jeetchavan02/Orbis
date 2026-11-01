@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { realProductFor } from "../data/products";
 import type { FurnitureObject, Opening, Room, Scene, WallSide } from "@reality-builder/shared";
 import { footprint, isFloorCovering, satPenetration, worldToRoom, roomToWorld } from "@reality-builder/spatial-engine";
 import { catalogById, type CatalogItem } from "../data/catalog";
@@ -82,6 +83,7 @@ export function itemFromEntry(entry: CatalogItem, room: Room, x: number, z: numb
     version: 1,
     ...(entry.light ? { light: entry.light } : {}),
     ...(entry.constraints ? { constraints: entry.constraints } : {}),
+    ...(realProductFor(entry, entry.color) ? { product: realProductFor(entry, entry.color) } : {}),
   };
 }
 

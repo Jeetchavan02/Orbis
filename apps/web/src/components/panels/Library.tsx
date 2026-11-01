@@ -7,6 +7,8 @@ import { catalog, GROUPS, ROOM_TYPES, type CatalogItem, type GroupId, type RoomT
 import { placeEntry, usePlacement } from "../../lib/placement";
 import { useThumbnail } from "../../lib/thumbnails";
 import { useWorkspaceStore } from "../../store/workspace";
+import { realProductFor } from "../../data/products";
+import { formatInr } from "@reality-builder/shared";
 
 export const LIBRARY_DRAG_TYPE = "application/x-reality-builder-catalog";
 /** The id being dragged (dataTransfer contents are not readable during dragover). */
@@ -79,6 +81,7 @@ const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: b
   const thumbnail = useThumbnail(entry, element);
   const { start, cancel } = usePlacement.getState();
   const favourite = useFavourites((state) => state.ids.includes(entry.id));
+  const product = useMemo(() => realProductFor(entry, entry.color), [entry]);
   return (
     <button
       ref={setElement}
@@ -105,10 +108,11 @@ const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: b
         cancel();
         placeEntry(entry.id);
       }}
-      title={`${entry.name}\n${entry.dimensions.width} × ${entry.dimensions.depth} × ${entry.dimensions.height} m\nClick to add to the centre of the room, or drag it to a spot.`}
+      title={`${entry.name}${product ? `\nReal product: ${product.productName}, ${formatInr(product.price)} at IKEA India` : ""}\n${entry.dimensions.width} × ${entry.dimensions.depth} × ${entry.dimensions.height} m\nClick to add to the centre of the room, or drag it to a spot.`}
     >
       <span className="lib-thumb">
         {thumbnail ? <img src={thumbnail} alt="" draggable={false} /> : <GroupIcon group={entry.group} size={22} />}
+        {product?.thumbnailUrl ? <img className="lib-real" src={product.thumbnailUrl} alt={product.productName} loading="lazy" draggable={false} referrerPolicy="no-referrer" title={"Real product: " + product.productName} /> : null}
       </span>
       <span
         role="button"
@@ -121,6 +125,7 @@ const Card = memo(function Card({ entry, armed }: { entry: CatalogItem; armed: b
       ><Heart size={13} fill={favourite ? "currentColor" : "none"} /></span>
       <span className="lib-name">{entry.name}</span>
       <span className="lib-dims">{entry.dimensions.width} × {entry.dimensions.depth} m</span>
+      {product ? <span className="lib-price" title={`${product.productName} · IKEA India · price checked ${product.priceCheckedAt}`}>{formatInr(product.price)} <small>IKEA</small></span> : entry.opening || entry.group === "basic" ? null : <span className="lib-price lib-price--none">Amazon · Flipkart</span>}
     </button>
   );
 });

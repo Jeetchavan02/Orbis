@@ -20,13 +20,14 @@ import {
 } from "lucide-react";
 import { SceneViewport } from "./components/SceneViewport";
 import { FloorPlan } from "./components/FloorPlan";
-import { duplicate, Inspector } from "./components/panels/Inspector";
+import { copyObject, duplicate, Inspector, pasteObject } from "./components/panels/Inspector";
 import { IssuesPanel } from "./components/panels/IssuesPanel";
 import { LeftPanel } from "./components/panels/LeftPanel";
 import { dragging, LIBRARY_DRAG_TYPE } from "./components/panels/Library";
 import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
 import { ExportPdfDialog } from "./components/panels/ExportPdfDialog";
+import { ShopDrawer } from "./components/panels/Shop";
 import { ConflictDialog, JoinPrompt, MissingProject, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
 import { LabelInput } from "./components/viewport/Annotations";
@@ -39,11 +40,15 @@ import { CAMERAS, TOOLS, ViewportChrome } from "./components/viewport/ViewportCh
 import { usePerfStore } from "./lib/perf";
 import { useContextMenu } from "./lib/ui";
 import { useWorkspaceStore } from "./store/workspace";
+import { removeOpening, useOpeningSelection } from "./lib/openings";
 
 type RightTab = "properties" | "issues";
 
 function deleteSelected() {
   const { scene, selectedEntityId, dispatch, selectEntity } = useWorkspaceStore.getState();
+  const door = useOpeningSelection.getState();
+  const doorRoom = scene.rooms.find((room) => room.id === door.roomId);
+  if (doorRoom && door.openingId) { removeOpening(doorRoom, door.openingId); return; }
   const item = scene.furniture.find((entry) => entry.id === selectedEntityId);
   if (item && dispatch({ type: "furniture.delete", furnitureId: item.id }, { base: { [item.id]: item.version } })) selectEntity("");
 }
@@ -105,6 +110,15 @@ export default function App() {
         event.preventDefault();
         const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
         if (item) duplicate(item);
+      } else if (mod && (key === "c" || key === "x") && !event.shiftKey) {
+        const item = state.scene.furniture.find((entry) => entry.id === state.selectedEntityId);
+        if (item) {
+          event.preventDefault();
+          copyObject(item, key === "x");
+        }
+      } else if (mod && key === "v" && !event.shiftKey) {
+        event.preventDefault();
+        pasteObject();
       } else if (key === "delete" || key === "backspace") {
         deleteSelected();
       } else if (key === "escape") {
@@ -274,6 +288,7 @@ export default function App() {
       <ConflictDialog />
       <ShareDialog />
       <ExportPdfDialog />
+      <ShopDrawer />
       <LabelInput />
       <ShortcutHelp />
       <ToolBanner />

@@ -53,7 +53,7 @@ export function scoreLayout(scene: Scene, issues?: ValidationIssue[], roomId?: s
   });
 
   // Circulation: share of the floor a person can actually reach from a door.
-  const doors = room.openings.filter((opening) => opening.kind === "door");
+  const doors = room.openings.filter((opening) => opening.kind !== "window");
   let circulation = 0;
   let circulationDetail = "No door — circulation cannot be measured.";
   if (doors.length) {

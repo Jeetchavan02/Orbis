@@ -12,7 +12,7 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
   { title: "Tools", keys: [["A", "Select"], ["W", "Move"], ["O", "Rotate"], ["R", "Scale"], ["V", "Vertices"], ["G", "Faces"]] },
   { title: "Create", keys: [["S", "Square (box)"], ["C", "Circle (cylinder)"], ["L", "Line / measure"], ["T", "Text label"], ["E", "Extrude face"], ["⇧E", "Push face in"]] },
   { title: "Views", keys: [["1–7", "Perspective … Floor plan"], ["F", "Frame selection"], ["H", "Reset view"], ["P", "Performance"]] },
-  { title: "Edit", keys: [["⌘Z / ⇧⌘Z", "Undo / redo"], ["⌘D", "Duplicate"], ["Del", "Delete"], ["[ ]", "Rotate 15°"], ["Arrows", "Nudge"], ["Esc", "Cancel"]] },
+  { title: "Edit", keys: [["⌘Z / ⇧⌘Z", "Undo / redo"], ["⌘C / ⌘V", "Copy / paste"], ["⌘X", "Cut"], ["⌘D", "Duplicate"], ["Del", "Delete"], ["[ ]", "Rotate 15°"], ["Arrows", "Nudge"], ["Esc", "Cancel"]] },
 ];
 
 /** Compact cheat-sheet (press ? or click the keyboard button). */

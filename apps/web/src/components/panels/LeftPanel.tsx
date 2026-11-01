@@ -19,7 +19,7 @@ export function placeCatalogItem(entry: { id: string }, at?: { x: number; z: num
 }
 
 export function LeftPanel() {
-  const [tab, setTab] = useState<"scene" | "library" | "elements" | "lights">("library");
+  const [tab, setTab] = useState<"scene" | "library" | "elements" | "lights" | "materials">("library");
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -79,9 +79,6 @@ export function LeftPanel() {
           <entry.icon size={18} /><span>{entry.label}</span>
         </button>
       ))}
-      <button type="button" onClick={() => { const room = activeRoom(useWorkspaceStore.getState().scene); if (room) selectEntity(room.id); }} title="Floor, wall and ceiling materials of the active room (opens in Properties)">
-        <Paintbrush size={18} /><span>Materials</span>
-      </button>
       <span className="left-rail-spacer" />
       <button type="button" onClick={() => useSettingsDialog.getState().setOpen(true)} title="Layout rules and display options">
         <Settings size={18} /><span>Settings</span>
@@ -90,7 +87,7 @@ export function LeftPanel() {
     <aside className="left-panel" aria-label="Scene and library">
       <div className="left-panel-head">
         <span>{RAIL.find((entry) => entry.id === tab)!.title}</span>
-        {tab !== "scene" ? (
+        {tab !== "scene" && tab !== "materials" ? (
           <button type="button" className="head-upload" onClick={() => usePhotoDialog.getState().setOpen(true)} title="Upload a photo: the background is removed and it becomes a 3D object in the room">
             <ImageUp size={14} /> Upload photo
           </button>
@@ -137,6 +134,8 @@ export function LeftPanel() {
             {floorItems.length > 0 && visible.length === 0 ? <p className="field-note pad">No objects match “{query}”.</p> : null}
           </div>
         </>
+      ) : tab === "materials" ? (
+        <MaterialsPanel />
       ) : (
         <Library key={tab} onImport={() => fileRef.current?.click()} importing={importing} initialGroup={tab === "elements" ? "openings" : tab === "lights" ? "lighting" : "all"} />
       )}
@@ -154,4 +153,50 @@ const RAIL = [
   { id: "scene", label: "Rooms", title: "Rooms & objects", icon: Layers, tip: "Rooms and the objects in them" },
   { id: "elements", label: "Elements", title: "Doors & windows", icon: DoorOpen, tip: "Doors and windows" },
   { id: "lights", label: "Lights", title: "Lighting", icon: Lightbulb, tip: "Lamps and light fixtures" },
+  { id: "materials", label: "Materials", title: "Materials", icon: Paintbrush, tip: "Floor and wall finishes of the current room" },
 ] as const;
+
+const FLOORS = [
+  ["Light oak", "#d8b98c"], ["Oak", "#c8ab86"], ["Walnut", "#7a5536"], ["Dark wood", "#4f3524"],
+  ["White tile", "#eceae4"], ["Grey tile", "#c9c7c1"], ["Stone", "#d9d6cf"], ["Terracotta", "#c07a55"],
+  ["Concrete", "#a9a7a2"], ["Charcoal", "#4a4a4d"], ["Sage carpet", "#a7b39a"], ["Navy carpet", "#3e4c66"],
+] as const;
+const WALLS = [
+  ["Warm white", "#f1eee8"], ["Pure white", "#fafafa"], ["Greige", "#ddd6cb"], ["Sand", "#e6d7bd"],
+  ["Sage", "#c9d3c0"], ["Sky", "#cfdde8"], ["Blush", "#ecd6d0"], ["Terracotta", "#d4a28a"],
+  ["Olive", "#9aa07f"], ["Slate", "#7d8794"], ["Navy", "#3f4b63"], ["Charcoal", "#4b4b4f"],
+] as const;
+
+/** Floor and wall finishes for the room on the active floor; every pick is one undoable room.update. */
+function MaterialsPanel() {
+  const scene = useWorkspaceStore((state) => state.scene);
+  const activeRoomId = useWorkspaceStore((state) => state.activeRoomId);
+  const { dispatch } = useWorkspaceStore.getState();
+  const room = scene.rooms.find((entry) => entry.id === activeRoomId) ?? activeRoom(scene);
+  if (!room) return <p className="field-note pad">Add a room first.</p>;
+  const set = (patch: { floorColor?: string; wallColor?: string }) => dispatch({ type: "room.update", roomId: room.id, patch }, { base: { [room.id]: room.version } });
+  const swatches = (list: readonly (readonly [string, string])[], current: string, key: "floorColor" | "wallColor") => (
+    <div className="mat-grid">
+      {list.map(([name, color]) => (
+        <button key={color} type="button" className={"mat-swatch" + (current.toLowerCase() === color ? " active" : "")} onClick={() => set({ [key]: color })} title={name} aria-pressed={current.toLowerCase() === color}>
+          <span style={{ background: color }} />
+          <small>{name}</small>
+        </button>
+      ))}
+      <label className="mat-swatch mat-custom" title="Custom colour">
+        <input type="color" value={current} onChange={(event) => set({ [key]: event.target.value })} />
+        <small>Custom</small>
+      </label>
+    </div>
+  );
+  return (
+    <div className="mat-panel">
+      <p className="field-note">Room: <strong>{room.name}</strong> (switch rooms from the top bar)</p>
+      <h4>Floor</h4>
+      {swatches(FLOORS, room.floorColor, "floorColor")}
+      <h4>Walls</h4>
+      {swatches(WALLS, room.wallColor, "wallColor")}
+      <p className="field-note">Furniture finishes: select a piece, then use Material in Properties.</p>
+    </div>
+  );
+}

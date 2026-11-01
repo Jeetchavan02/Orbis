@@ -159,7 +159,7 @@ export function AuthScreen({ mode }: { mode: AuthMode }) {
     <div className="auth">
       <section className="auth-brand" aria-hidden="true">
         <div className="auth-orbits"><span /><span /><span /></div>
-        <div className="auth-brand-top"><span className="auth-brand-mark"><OrbisMark size={30} /></span><span className="auth-brand-word">Orbis</span></div>
+        <div className="auth-brand-top"><span className="auth-brand-mark"><OrbisMark size={30} /></span><span className="auth-brand-word">ORBIS</span></div>
         <div className="auth-brand-copy">
           <h2>Design spaces together.</h2>
           <p>A collaborative 3D room editor that understands space: it catches collisions, blocked paths and cramped corners, then helps you fix them.</p>
@@ -174,7 +174,7 @@ export function AuthScreen({ mode }: { mode: AuthMode }) {
 
       <main className="auth-panel">
         <div className="auth-card">
-          <div className="auth-mobile-brand"><span className="auth-brand-mark"><OrbisMark size={22} /></span><strong>Orbis</strong></div>
+          <div className="auth-mobile-brand"><span className="auth-brand-mark"><OrbisMark size={22} /></span><strong>ORBIS</strong></div>
           {mode === "forgot" || mode === "reset" ? <button type="button" className="auth-back" onClick={() => go("login")}><ArrowLeft size={15} /> Back to log in</button> : null}
           <h1>{titles[mode][0]}</h1>
           <p className="auth-sub">{titles[mode][1]}</p>

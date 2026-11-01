@@ -281,7 +281,7 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
         <div className="up-review">
           <section className="up-pane">
             <div className="up-pane-head">
-              <h2>{house.house.name}</h2>
+              <h2>{house.house.name} · whole building</h2>
               <button type="button" className="ghost-button" onClick={() => void analyseHouse()}><RefreshCw size={14} /> Regenerate</button>
             </div>
             <div className="up-compare">
@@ -334,7 +334,10 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
             </div>
             {extraction.planRooms.length > 1 ? (
               <div className="up-rooms">
-                <span>This plan has {extraction.planRooms.length} rooms. Reconstruct:</span>
+                <div className="up-rooms-head">
+                  <span>This plan has {extraction.planRooms.length} rooms. Reconstruct:</span>
+                  <button type="button" className="primary-button" onClick={() => void analyseHouse()}><Upload size={14} /> Import whole building</button>
+                </div>
                 <div className="up-room-chips">
                   {extraction.planRooms.map((room) => (
                     <button key={room.name + room.label} type="button" className={room.name.toLowerCase() === extraction.roomName.toLowerCase() && (!room.label || extraction.measurements.some((entry) => entry.label === room.label)) ? "active" : ""} onClick={() => void analyse(room.label ? `${room.name} (${room.label})` : room.name)}>

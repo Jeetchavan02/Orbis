@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { ShoppingBag } from "lucide-react";
+import { useShop } from "./Shop";
 import { OrbisMark } from "../brand/Logo";
 import { Bell, Eye, FileDown, FileJson, Home, PersonStanding, Sparkles, Users } from "lucide-react";
 import { useAskAi, useExportPdf, useShareDialog } from "../../lib/ui";
@@ -70,7 +72,7 @@ export function TopBar() {
         <a className="icon-button" href="/" title="Back to projects" aria-label="Back to projects"><Home size={16} /></a>
         <div className="brand" aria-label="Orbis">
           <span className="brand-mark"><OrbisMark size={20} /></span>
-          <span className="brand-name">Orbis</span>
+          <span className="brand-name">ORBIS</span>
         </div>
         <span className="divider" />
         <input
@@ -139,6 +141,7 @@ export function TopBar() {
         <button type="button" className={"ghost-button" + (viewMode === "walk" ? " ghost-button--active" : "")} onClick={() => setViewMode(viewMode === "walk" ? "perspective" : "walk")} title="Walk through the room at eye height (WASD to move)"><PersonStanding size={14} /> {viewMode === "walk" ? "Exit walk" : "Walkthrough"}</button>
         <NotificationsBell />
         <button type="button" className="ghost-button topbar-export" onClick={() => useExportPdf.getState().setOpen(true)} title="Download a multi-view design PDF"><FileDown size={14} /> <span>Export PDF</span></button>
+        <button type="button" className="ghost-button topbar-shop" onClick={() => useShop.getState().setOpen(true)} title="Shop this room: linked products grouped by retailer"><ShoppingBag size={14} /> <span>Shop</span></button>
         <button type="button" className="ghost-button" onClick={() => useShareDialog.getState().setOpen(true)} title="Invite collaborators"><Users size={14} /> Share</button>
         <button type="button" className="primary-button" onClick={save} title="Save (⌘S)"><Save size={14} /> Save</button>
         <div className="menu" ref={menuRef}>

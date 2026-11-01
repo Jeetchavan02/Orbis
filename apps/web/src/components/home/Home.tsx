@@ -5,7 +5,10 @@ import {
   ArrowRight, Bell, LogOut, ChevronRight, PanelLeft, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
   Search, Settings, ShieldCheck, Sparkles, Trash2, Upload, Users, X, Zap,
 } from "lucide-react";
-import { catalog, GROUPS, type GroupId } from "../../data/catalog";
+import { catalog, GROUPS, type CatalogItem, type GroupId } from "../../data/catalog";
+import { realProductFor } from "../../data/products";
+import { ProductCard } from "../panels/Shop";
+import { formatInr } from "@reality-builder/shared";
 import { useThumbnail } from "../../lib/thumbnails";
 import { saveDefaultProfile } from "../../lib/collab";
 import { authFetch, logout, type Me } from "../../lib/auth";
@@ -109,11 +112,11 @@ function ProjectCard({ project, onChanged, wide }: { project: Project; onChanged
   );
 }
 
-function LibraryThumb({ id }: { id: string }) {
+function LibraryThumb({ id, real }: { id: string; real?: string }) {
   const entry = catalog.find((item) => item.id === id)!;
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const url = useThumbnail(entry, element);
-  return <div ref={setElement} className="lib-thumb">{url ? <img src={url} alt="" /> : null}</div>;
+  return <div ref={setElement} className="lib-thumb">{url ? <img src={url} alt="" /> : null}{real ? <img className="lib-real" src={real} alt="" loading="lazy" referrerPolicy="no-referrer" /> : null}</div>;
 }
 
 function NewProjectDialog({ draft, onClose }: { draft: Draft; onClose: () => void }) {
@@ -182,6 +185,8 @@ export function Home({ user }: { user: Me }) {
   const [query, setQuery] = useState("");
   const [bell, setBell] = useState(false);
   const [libraryGroup, setLibraryGroup] = useState<GroupId | "all">("all");
+  const [picked, setPicked] = useState<CatalogItem | null>(null);
+  const [libraryLimit, setLibraryLimit] = useState(120);
   const [profile, setProfile] = useState({ name: user.name, color: user.color });
   const [account, setAccount] = useState(false);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("rb.sidebar") === "1"; } catch { return false; } });
@@ -240,7 +245,7 @@ export function Home({ user }: { user: Me }) {
       <aside className={"home-sidebar" + (collapsed ? " home-sidebar--collapsed" : "")}>
         <div className="hs-head">
           <span className="brand-cube"><OrbisMark size={24} /></span>
-          <strong className="hs-title">Orbis</strong>
+          <strong className="hs-title">ORBIS</strong>
           <button type="button" className="hs-toggle" onClick={toggleCollapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}><PanelLeft size={18} /></button>
         </div>
         <nav className="hs-group">
@@ -377,11 +382,34 @@ export function Home({ user }: { user: Me }) {
               <button type="button" className={libraryGroup === "all" ? "active" : ""} onClick={() => setLibraryGroup("all")}>All</button>
               {(Object.keys(GROUPS) as GroupId[]).map((group) => <button key={group} type="button" className={libraryGroup === group ? "active" : ""} onClick={() => setLibraryGroup(group)}>{GROUPS[group].label}</button>)}
             </div>
-            <div className="home-library-grid">
-              {catalog.filter((entry) => (libraryGroup === "all" || entry.group === libraryGroup) && (!needle || entry.name.toLowerCase().includes(needle))).slice(0, 120).map((entry) => (
-                <div key={entry.id} className="lib-card lib-card--static"><LibraryThumb id={entry.id} /><span className="lib-name">{entry.name}</span><span className="lib-dims">{entry.dimensions.width} × {entry.dimensions.depth} m</span></div>
-              ))}
+            <div className="home-library">
+              <div className="home-library-grid">
+                {catalog.filter((entry) => (libraryGroup === "all" || entry.group === libraryGroup) && (!needle || entry.name.toLowerCase().includes(needle))).slice(0, libraryLimit).map((entry) => {
+                  const product = realProductFor(entry, entry.color);
+                  return (
+                    <button key={entry.id} type="button" className={"lib-card lib-card--static" + (picked?.id === entry.id ? " lib-card--armed" : "")} onClick={() => setPicked(entry)}>
+                      <LibraryThumb id={entry.id} real={product?.thumbnailUrl} />
+                      <span className="lib-name">{entry.name}</span>
+                      <span className="lib-dims">{entry.dimensions.width} × {entry.dimensions.depth} m</span>
+                      {product ? <span className="lib-price">{formatInr(product.price)} <small>IKEA</small></span> : entry.opening || entry.group === "basic" ? null : <span className="lib-price lib-price--none">Amazon · Flipkart</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              {picked ? (
+                <aside className="home-lib-detail">
+                  <header><h3>{picked.name}</h3><button type="button" className="icon-button" aria-label="Close" onClick={() => setPicked(null)}><X size={16} /></button></header>
+                  <LibraryThumb id={picked.id} />
+                  <dl className="home-lib-specs">
+                    <div><dt>Size</dt><dd>{picked.dimensions.width} × {picked.dimensions.depth} × {picked.dimensions.height} m</dd></div>
+                    <div><dt>Category</dt><dd>{GROUPS[picked.group].label}</dd></div>
+                    <div><dt>Rooms</dt><dd>{picked.rooms.join(", ") || "—"}</dd></div>
+                  </dl>
+                  {picked.opening || picked.group === "basic" ? <p className="shop-meta">Building element, not a product.</p> : <><h4>Real product</h4><ProductCard entry={picked} colour={picked.color} /></>}
+                </aside>
+              ) : null}
             </div>
+            {catalog.filter((entry) => (libraryGroup === "all" || entry.group === libraryGroup) && (!needle || entry.name.toLowerCase().includes(needle))).length > libraryLimit ? <button type="button" className="ghost-button lib-more" onClick={() => setLibraryLimit(libraryLimit + 120)}>Show more</button> : null}
             <p className="field-note">Open a project to drag these into a room.</p>
           </div>
         ) : null}

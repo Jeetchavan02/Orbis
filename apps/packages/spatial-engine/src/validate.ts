@@ -265,8 +265,10 @@ export function validateScene(scene: Scene, options: ValidateOptions = {}): Vali
   if (scene.rules.pathways) {
     const walkerRadius = scene.rules.minPassageWidth / 2;
     for (const room of scene.rooms) {
-      const doors = room.openings.filter((opening) => opening.kind === "door");
+      // People enter through doors and open passages; only doors have a leaf that needs swing space.
+      const doors = room.openings.filter((opening) => opening.kind !== "window");
       for (const door of doors) {
+        if (door.kind !== "door") continue;
         // Outward-swinging doors sweep outside this room, so nothing inside can block them.
         if (door.swing === "out") continue;
         const zone = doorSwingZone(room, door);

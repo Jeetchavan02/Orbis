@@ -23,6 +23,8 @@ import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { commitMesh } from "../viewport/MeshEditor";
 import { ColorField, NumberField, Section, Toggle } from "./fields";
 import { uploadImage } from "../../lib/assets";
+import { ProductSection } from "./Shop";
+import { addDoor } from "../../lib/openings";
 
 /** Details of a library item the user just picked (before it is placed). */
 function CatalogDetails({ entry }: { entry: CatalogItem }) {
@@ -51,7 +53,7 @@ function CatalogDetails({ entry }: { entry: CatalogItem }) {
       <Section title="Details">
         <div className="spec-grid">
           <span>Material</span><strong><span className="spec-swatch" style={{ background: entry.color }} /> {entry.color.toUpperCase()}</strong>
-          {entry.opening ? <><span>Type</span><strong>{entry.opening.kind === "door" ? "Door (wall opening)" : "Window (wall opening)"}</strong></> : null}
+          {entry.opening ? <><span>Type</span><strong>{entry.opening.kind === "door" ? "Door (wall opening)" : entry.opening.kind === "passage" ? "Open passage (wall opening)" : "Window (wall opening)"}</strong></> : null}
           {!entry.opening ? <><span>Front clearance</span><strong>{entry.constraints?.floorCovering ? "None (floor covering)" : clearance > 0 ? `${clearance.toFixed(2)} m` : "None"}</strong></> : null}
           {entry.light ? <><span>Light</span><strong>{entry.light.kind === "spot" ? "Spotlight" : "Point light"}, {entry.light.intensity} cd</strong></> : null}
         </div>
@@ -188,6 +190,7 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
         </div>
       </Section>
 
+      <ProductSection item={item} />
       <Section title="Spatial validation" collapsible aside={<span className={"validation-chip validation-chip--" + (issues.some((issue) => issue.severity === "error") ? "error" : issues.length ? "warning" : "ok")}>{issues.length === 0 ? "OK" : issues.length}</span>}>
         {issues.length === 0 ? <p className="field-note">No collisions, boundary, clearance or pathway issues for this object.</p> : null}
         {issues.map((issue) => <p key={issue.id} className="issue-inline">{issue.message}</p>)}
@@ -285,14 +288,57 @@ function patchMesh(item: FurnitureObject) {
   );
 }
 
+/** Online edits appear when the server confirms them, so select a newly created object once it exists. */
+function selectWhenPresent(id: string) {
+  const store = useWorkspaceStore;
+  if (store.getState().scene.furniture.some((entry) => entry.id === id)) return store.getState().selectEntity(id);
+  const stop = store.subscribe((state) => {
+    if (state.scene.furniture.some((entry) => entry.id === id)) { stop(); window.clearTimeout(timer); state.selectEntity(id); }
+  });
+  const timer = window.setTimeout(stop, 5000);
+}
+
 export function duplicate(item: FurnitureObject) {
   const id = newEntityId("obj");
-  const { dispatch, selectEntity } = useWorkspaceStore.getState();
+  const { dispatch } = useWorkspaceStore.getState();
   const ok = dispatch({
     type: "furniture.create",
     furniture: { ...item, id, name: item.name.replace(/( copy)*$/, "") + " copy", position: { ...item.position, x: item.position.x + 0.3, z: item.position.z + 0.3 }, version: 1 },
   }, { label: "Duplicate " + item.name });
-  if (ok) selectEntity(id);
+  if (ok) selectWhenPresent(id);
+}
+
+// ---- Copy / paste (⌘C / ⌘V / ⌘X). The clipboard is this tab's memory; each paste is one undoable create.
+let clipboard: FurnitureObject | null = null;
+let pasteCount = 0;
+
+export function copyObject(item: FurnitureObject, cut = false) {
+  clipboard = structuredClone(item);
+  pasteCount = 0;
+  const state = useWorkspaceStore.getState();
+  if (cut) state.dispatch({ type: "furniture.delete", furnitureId: item.id }, { base: { [item.id]: item.version }, label: "Cut " + item.name });
+  state.notify("info", `${cut ? "Cut" : "Copied"} ${item.name}. Press ⌘V to paste.`);
+}
+
+/** Pastes into the room on the active floor: same spot stepped 0.3 m per paste, kept inside the room. */
+export function pasteObject() {
+  if (!clipboard) return;
+  const { scene, activeRoomId, dispatch } = useWorkspaceStore.getState();
+  const room = scene.rooms.find((entry) => entry.id === activeRoomId) ?? scene.rooms.find((entry) => entry.id === clipboard!.roomId) ?? scene.rooms[0];
+  if (!room) return;
+  pasteCount += 1;
+  const sameRoom = room.id === clipboard.roomId && scene.rooms.some((entry) => entry.id === clipboard!.roomId);
+  const step = 0.3 * pasteCount;
+  const half = Math.max(clipboard.dimensions.width, clipboard.dimensions.depth) / 2;
+  const clampTo = (value: number, centre: number, size: number) => Math.min(centre + size / 2 - half, Math.max(centre - size / 2 + half, value));
+  const x = clampTo((sameRoom ? clipboard.position.x : room.position.x) + step, room.position.x, room.dimensions.width);
+  const z = clampTo((sameRoom ? clipboard.position.z : room.position.z) + step, room.position.z, room.dimensions.depth);
+  const id = newEntityId("obj");
+  const ok = dispatch({
+    type: "furniture.create",
+    furniture: { ...structuredClone(clipboard), id, roomId: room.id, position: { ...clipboard.position, x, z, y: room.position.y + (clipboard.position.y - (scene.rooms.find((entry) => entry.id === clipboard!.roomId)?.position.y ?? room.position.y)) }, version: 1 },
+  }, { label: "Paste " + clipboard.name });
+  if (ok) selectWhenPresent(id);
 }
 
 function LightSection({ light, onChange }: { light: LightFixture; onChange: (light: LightFixture) => void }) {
@@ -424,15 +470,25 @@ function RoomInspector({ room }: { room: Room }) {
       <UnderlaySection room={room} />
       <Section title="Doors & windows" aside={
         <span className="inline-actions">
-          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("door"), kind: "door", wall: "south", offset: 0, width: 0.85, height: 2.05, sillHeight: 0, hinge: "left", swing: "in" }])}><DoorOpen size={13} /> Door</button>
-          <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("window"), kind: "window", wall: "north", offset: 0, width: 1.2, height: 1.3, sillHeight: 0.9, hinge: "left", swing: "in" }])}><Plus size={13} /> Window</button>
+          <button type="button" className="tiny-button" onClick={() => addDoor(room)}><DoorOpen size={13} /> Door</button>
+          <button type="button" className="tiny-button" onClick={() => addDoor(room, undefined, "window")}><Plus size={13} /> Window</button>
+          <button type="button" className="tiny-button" onClick={() => addDoor(room, undefined, "passage")}><Plus size={13} /> Opening</button>
         </span>
       }>
         {room.openings.length === 0 ? <p className="field-note">No openings. Pathway checks need at least one door.</p> : null}
         {room.openings.map((opening) => (
           <div key={opening.id} className="opening-card">
             <div className="opening-card-head">
-              <strong>{opening.kind === "door" ? "Door" : "Window"}</strong>
+              <select value={opening.kind} aria-label="Type" onChange={(event) => {
+                const kind = event.target.value as Opening["kind"];
+                updateOpening(opening.id, kind === "window"
+                  ? { kind, sillHeight: 0.9, height: Math.min(1.3, room.dimensions.height - 1.1) }
+                  : { kind, sillHeight: 0, height: kind === "door" ? Math.min(2.05, room.dimensions.height - 0.2) : Math.min(2.4, room.dimensions.height - 0.1) });
+              }}>
+                <option value="door">Door</option>
+                <option value="passage">Open passage</option>
+                <option value="window">Window</option>
+              </select>
               <select value={opening.wall} onChange={(event) => updateOpening(opening.id, { wall: event.target.value as WallSide, offset: 0 })} aria-label="Wall">
                 {WALLS.map((wall) => <option key={wall} value={wall}>{wall} wall</option>)}
               </select>

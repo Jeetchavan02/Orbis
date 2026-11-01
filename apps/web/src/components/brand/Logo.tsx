@@ -19,7 +19,7 @@ export function OrbisLogo({ size = 28, tile = false, wordmark = true, className 
   return (
     <span className={"orbis-logo" + (className ? " " + className : "")}>
       {tile ? <span className="orbis-tile" style={{ width: size + 12, height: size + 12 }}><OrbisMark size={size} /></span> : <OrbisMark size={size} className="orbis-mark" />}
-      {wordmark ? <span className="orbis-word">Orbis</span> : null}
+      {wordmark ? <span className="orbis-word">ORBIS</span> : null}
     </span>
   );
 }

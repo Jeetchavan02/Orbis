@@ -1,7 +1,12 @@
-import { Component, memo, Suspense, useMemo, useRef, type ReactNode } from "react";
+import { Component, memo, Suspense, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Line, Text } from "@react-three/drei";
-import { CanvasTexture, MathUtils, RepeatWrapping, SRGBColorSpace, Vector3, type Group } from "three";
+import { Html, Line, Text } from "@react-three/drei";
+import type { ThreeEvent } from "@react-three/fiber";
+import { ArrowLeftRight, DoorOpen, FlipHorizontal2, Minus, Plus, Trash2, X } from "lucide-react";
+import { addDoor, commitOpening, openingHeight, removeOpening, resizeEdge, setWidth, slide, useOpeningSelection } from "../../lib/openings";
+import { drag } from "./Interaction";
+import { useWorkspaceStore } from "../../store/workspace";
+import { CanvasTexture, Matrix4, MathUtils, Plane, RepeatWrapping, SRGBColorSpace, Vector3, type Group } from "three";
 import type { Opening, Room, WallSide } from "@reality-builder/shared";
 
 const DEG = Math.PI / 180;
@@ -56,7 +61,8 @@ function Wall({ room, side, cutaway }: { room: Room; side: WallSide; cutaway: bo
   const { width, depth, height, wallThickness: t } = room.dimensions;
   const horizontal = side === "north" || side === "south";
   const length = horizontal ? width + 2 * t : depth;
-  const openings = room.openings.filter((opening) => opening.wall === side);
+  const draft = useOpeningSelection((state) => (state.roomId === room.id ? state.draft : null));
+  const openings = useMemo(() => room.openings.map((opening) => (draft && opening.id === draft.id ? draft : opening)).filter((opening) => opening.wall === side), [room.openings, draft, side]);
   const segments = useMemo(() => wallSegments(length, height, openings), [length, height, openings]);
   const frame = WALL_FRAMES[side];
   const center: [number, number] = horizontal ? [0, frame.normal[1] * (depth / 2 + t / 2)] : [frame.normal[0] * (width / 2 + t / 2), 0];
@@ -94,7 +100,7 @@ function Wall({ room, side, cutaway }: { room: Room; side: WallSide; cutaway: bo
           </mesh>
         ))}
         {openings.map((opening) => (
-          <OpeningModel key={opening.id} opening={opening} along={opening.offset * alongSign} thickness={t} />
+          <EditableOpening key={opening.id} room={room} opening={opening} alongSign={alongSign} thickness={t} />
         ))}
       </group>
     </group>
@@ -124,12 +130,17 @@ function OpeningModel({ opening, along, thickness }: { opening: Opening; along: 
       </group>
     );
   }
+  const trim = <OpeningTrim opening={opening} along={along} thickness={thickness} />;
+  // Open passage: a lined, trimmed gap in the wall.
+  if (opening.kind === "passage") return trim;
   // Door: frame + leaf shown ajar. Wall-local +Z points into the room and −X is "left" seen from inside.
   const leafWidth = opening.width - frame * 2;
   const hingeSign = opening.hinge === "right" ? 1 : -1;
   const swingIn = opening.swing !== "out";
   const angle = (swingIn ? 1 : -1) * hingeSign * 35 * DEG;
   return (
+    <>
+    {trim}
     <group position={[along, 0, 0]}>
       {[[-opening.width / 2 + frame / 2, opening.height / 2, frame, opening.height], [opening.width / 2 - frame / 2, opening.height / 2, frame, opening.height], [0, opening.height - frame / 2, opening.width, frame]].map(([x, y, w, h], index) => (
         <mesh key={index} position={[x!, y!, 0]}>
@@ -147,6 +158,145 @@ function OpeningModel({ opening, along, thickness }: { opening: Opening; along: 
           <meshStandardMaterial color="#b9b2a5" metalness={0.8} roughness={0.25} />
         </mesh>
       </group>
+    </group>
+    </>
+  );
+}
+
+const TRIM = "#f4f1eb";
+/** Architrave on both wall faces, jamb lining through the wall and a floor threshold, so openings read as built. */
+function OpeningTrim({ opening, along, thickness }: { opening: Opening; along: number; thickness: number }) {
+  const casing = 0.07;
+  const depth = 0.018;
+  const h = opening.height;
+  const w = opening.width;
+  return (
+    <group position={[along, 0, 0]}>
+      {[-1, 1].map((face) => (
+        <group key={face} position={[0, 0, face * (thickness / 2 + depth / 2)]}>
+          <mesh position={[-w / 2 - casing / 2, h / 2, 0]}><boxGeometry args={[casing, h, depth]} /><meshStandardMaterial color={TRIM} roughness={0.45} /></mesh>
+          <mesh position={[w / 2 + casing / 2, h / 2, 0]}><boxGeometry args={[casing, h, depth]} /><meshStandardMaterial color={TRIM} roughness={0.45} /></mesh>
+          <mesh position={[0, h + casing / 2, 0]}><boxGeometry args={[w + casing * 2, casing, depth]} /><meshStandardMaterial color={TRIM} roughness={0.45} /></mesh>
+        </group>
+      ))}
+      {opening.kind === "passage" ? (
+        <>
+          <mesh position={[-w / 2 + 0.006, h / 2, 0]}><boxGeometry args={[0.012, h, thickness]} /><meshStandardMaterial color={TRIM} roughness={0.5} /></mesh>
+          <mesh position={[w / 2 - 0.006, h / 2, 0]}><boxGeometry args={[0.012, h, thickness]} /><meshStandardMaterial color={TRIM} roughness={0.5} /></mesh>
+          <mesh position={[0, h - 0.006, 0]}><boxGeometry args={[w, 0.012, thickness]} /><meshStandardMaterial color={TRIM} roughness={0.5} /></mesh>
+        </>
+      ) : null}
+      <mesh position={[0, 0.006, 0]} receiveShadow><boxGeometry args={[w, 0.012, thickness + 0.02]} /><meshStandardMaterial color="#b9a78c" roughness={0.55} /></mesh>
+    </group>
+  );
+}
+
+const ACCENT = "#6a3de8";
+const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
+
+/**
+ * A door/window/passage that can be picked in 3D: click to select, drag its body to slide along the wall,
+ * drag the side handles to resize (snapped to 5 cm, never past the wall ends or a neighbouring opening),
+ * and use the floating bar to flip, change type or delete. Each drag is one undoable room action.
+ */
+function EditableOpening({ room, opening, alongSign, thickness }: { room: Room; opening: Opening; alongSign: number; thickness: number }) {
+  const base = useRef<Group>(null);
+  const selected = useOpeningSelection((state) => state.roomId === room.id && state.openingId === opening.id);
+  const session = useRef<{ mode: "slide" | -1 | 1; start: number; startOffset: number } | null>(null);
+  const along = opening.offset * alongSign;
+  const top = opening.sillHeight + opening.height;
+
+  // Selecting furniture deselects the opening.
+  useEffect(() => useWorkspaceStore.subscribe((state, prev) => {
+    if (state.selectedEntityId && state.selectedEntityId !== prev.selectedEntityId && useOpeningSelection.getState().openingId) useOpeningSelection.getState().select(null, null);
+  }), []);
+
+  const wallCoord = (event: ThreeEvent<PointerEvent>) => {
+    if (!base.current) return null;
+    const inverse = new Matrix4().copy(base.current.matrixWorld).invert();
+    const ray = event.ray.clone().applyMatrix4(inverse);
+    const hit = ray.intersectPlane(new Plane(new Vector3(0, 0, 1), 0), new Vector3());
+    return hit ? hit.x * alongSign : null;
+  };
+  const begin = (mode: "slide" | -1 | 1) => (event: ThreeEvent<PointerEvent>) => {
+    if (!selected && mode !== "slide") return;
+    event.stopPropagation();
+    if (!selected) { useOpeningSelection.getState().select(room.id, opening.id); useWorkspaceStore.getState().selectEntity(""); }
+    const at = wallCoord(event);
+    if (at === null) return;
+    session.current = { mode, start: at, startOffset: opening.offset };
+    (event.target as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture(event.pointerId);
+    drag.setControls?.(false);
+  };
+  const move = (event: ThreeEvent<PointerEvent>) => {
+    const current = session.current;
+    if (!current) return;
+    event.stopPropagation();
+    const at = wallCoord(event);
+    if (at === null) return;
+    const source = room.openings.find((entry) => entry.id === opening.id) ?? opening;
+    const next = current.mode === "slide"
+      ? slide(room, source, current.startOffset + (at - current.start))
+      : resizeEdge(room, source, (current.mode * alongSign) as -1 | 1, at);
+    useOpeningSelection.getState().setDraft(next);
+  };
+  const end = (event: ThreeEvent<PointerEvent>) => {
+    if (!session.current) return;
+    event.stopPropagation();
+    session.current = null;
+    drag.setControls?.(true);
+    const draft = useOpeningSelection.getState().draft;
+    useOpeningSelection.getState().setDraft(null);
+    const source = room.openings.find((entry) => entry.id === opening.id);
+    if (draft && source && (draft.offset !== source.offset || draft.width !== source.width)) commitOpening(room, draft, draft.width !== source.width ? "Resize door" : "Move door");
+  };
+
+  const label = opening.kind === "passage" ? "Opening" : opening.kind === "window" ? "Window" : "Door";
+  return (
+    <group ref={base}>
+      <OpeningModel opening={opening} along={along} thickness={thickness} />
+      {/* Pick target covering the whole opening (also the slide handle). */}
+      <mesh position={[along, opening.sillHeight + opening.height / 2, 0]} onPointerDown={begin("slide")} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
+        onClick={stop} onPointerOver={(event) => { event.stopPropagation(); document.body.style.cursor = selected ? "ew-resize" : "pointer"; }} onPointerOut={() => (document.body.style.cursor = "")}>
+        <boxGeometry args={[opening.width + 0.08, opening.height + 0.06, thickness + 0.06]} />
+        <meshBasicMaterial transparent opacity={selected ? 0.08 : 0} color={ACCENT} depthWrite={false} />
+      </mesh>
+      {selected ? (
+        <>
+          <Line points={[[along - opening.width / 2, opening.sillHeight, thickness / 2 + 0.03], [along + opening.width / 2, opening.sillHeight, thickness / 2 + 0.03], [along + opening.width / 2, top, thickness / 2 + 0.03], [along - opening.width / 2, top, thickness / 2 + 0.03], [along - opening.width / 2, opening.sillHeight, thickness / 2 + 0.03]]} color={ACCENT} lineWidth={2.5} />
+          {([-1, 1] as const).map((side) => (
+            <mesh key={side} position={[along + side * opening.width / 2, opening.sillHeight + opening.height / 2, thickness / 2 + 0.05]}
+              onPointerDown={begin(side)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onClick={stop}
+              onPointerOver={(event) => { event.stopPropagation(); document.body.style.cursor = "col-resize"; }} onPointerOut={() => (document.body.style.cursor = "")}>
+              <capsuleGeometry args={[0.045, Math.min(0.5, opening.height * 0.35), 4, 12]} />
+              <meshBasicMaterial color={ACCENT} />
+            </mesh>
+          ))}
+          <Html position={[along, top + 0.25, thickness / 2]} center zIndexRange={[30, 20]}>
+            <div className="door-bar" onPointerDown={stop} onClick={stop}>
+              <select value={opening.kind} aria-label="Type" onChange={(event) => {
+                const kind = event.target.value as Opening["kind"];
+                const height = openingHeight(room, kind);
+                commitOpening(room, { ...opening, kind, height, sillHeight: kind === "window" ? Math.min(0.9, room.dimensions.height - height - 0.1) : 0 }, "Change opening type");
+              }}>
+                <option value="door">Door</option><option value="passage">Open passage</option><option value="window">Window</option>
+              </select>
+              <button type="button" title="Narrower" onClick={() => commitOpening(room, setWidth(room, opening, opening.width - 0.05), "Resize door")}><Minus size={13} /></button>
+              <span className="door-width">{Math.round(opening.width * 100)} cm</span>
+              <button type="button" title="Wider (stops at walls and other openings)" onClick={() => commitOpening(room, setWidth(room, opening, opening.width + 0.05), "Resize door")}><Plus size={13} /></button>
+              {opening.kind === "door" ? (
+                <>
+                  <button type="button" title="Flip hinge side" onClick={() => commitOpening(room, { ...opening, hinge: opening.hinge === "left" ? "right" : "left" }, "Flip door")}><FlipHorizontal2 size={13} /></button>
+                  <button type="button" title={opening.swing === "out" ? "Opens outward: make it open into the room" : "Opens into the room: make it open outward"} onClick={() => commitOpening(room, { ...opening, swing: opening.swing === "out" ? "in" : "out" }, "Flip door swing")}><ArrowLeftRight size={13} /></button>
+                </>
+              ) : null}
+              <button type="button" title="Add another door on this wall" onClick={() => addDoor(room, opening.wall)}><DoorOpen size={13} /></button>
+              <button type="button" className="door-bar-danger" title={`Remove ${label.toLowerCase()} (Del)`} onClick={() => removeOpening(room, opening.id)}><Trash2 size={13} /></button>
+              <button type="button" title="Done (Esc)" onClick={() => useOpeningSelection.getState().select(null, null)}><X size={13} /></button>
+            </div>
+          </Html>
+        </>
+      ) : null}
     </group>
   );
 }

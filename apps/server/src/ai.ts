@@ -680,8 +680,8 @@ export function assembleHouse(house: MeasuredHouse, catalog: AiCatalogItem[], ne
         const width = fmt(Math.max(0.3, Math.min(opening.width, length - 0.1)));
         const offset = fmt(Math.max(-length / 2 + width / 2, Math.min(length / 2 - width / 2, opening.offset)));
         // A passage is an open side (no wall drawn): an opening up to just under the ceiling.
-        const height = opening.kind === "window" ? Math.min(1.3, house.height - 1.1) : opening.kind === "passage" ? house.height - 0.05 : Math.min(2.1, house.height - 0.2);
-        return { id: newId(), kind: opening.kind === "window" ? "window" as const : "door" as const, wall: opening.wall, offset, width, height, sillHeight: opening.kind === "window" ? 0.9 : 0, hinge: "left" as const, swing: "in" as const };
+        const height = opening.kind === "window" ? Math.min(1.3, house.height - 1.1) : opening.kind === "passage" ? Math.min(2.4, house.height - 0.1) : Math.min(2.1, house.height - 0.2);
+        return { id: newId(), kind: opening.kind, wall: opening.wall, offset, width, height, sillHeight: opening.kind === "window" ? 0.9 : 0, hinge: "left" as const, swing: "in" as const };
       }),
       version: 1,
     });
@@ -696,7 +696,167 @@ export function assembleHouse(house: MeasuredHouse, catalog: AiCatalogItem[], ne
       });
     }
   }
-  const scene = SceneSchema.parse({ schemaVersion: 1, id: "scene-house-" + newId(), name: house.name, coordinateSystem: "y-up-xz-meters", rooms, furniture, environment: { mode: "day", artificialLightScale: 1 } });
-  const notes = `${rooms.length} rooms, ${furniture.length} pieces measured from the plan.` + (skipped ? ` ${skipped} piece${skipped === 1 ? "" : "s"} without a catalog match were skipped.` : "");
+  const doorNotes = settleDoors(rooms, furniture);
+  const fixed = separateFurniture(rooms, furniture);
+  let scene = SceneSchema.parse({ schemaVersion: 1, id: "scene-house-" + newId(), name: house.name, coordinateSystem: "y-up-xz-meters", rooms, furniture, environment: { mode: "day", artificialLightScale: 1 } });
+  // Anything the engine still sees as a collision or outside its room is dropped (smallest piece first), so the plan
+  // always arrives with zero collisions; the note says what was removed.
+  const dropped: string[] = [];
+  for (let pass = 0; pass < 40; pass += 1) {
+    const hard = validateScene(scene).issues.find((issue) => issue.ruleId === "collision.overlap" || issue.ruleId === "boundary.outside-room");
+    if (!hard) break;
+    const pieces = scene.furniture.filter((item) => hard.objectIds.includes(item.id));
+    if (!pieces.length) break;
+    const smallest = pieces.reduce((a, b) => (a.dimensions.width * a.dimensions.depth <= b.dimensions.width * b.dimensions.depth ? a : b));
+    dropped.push(smallest.name.split(" — ")[0]!);
+    scene = { ...scene, furniture: scene.furniture.filter((item) => item.id !== smallest.id) };
+  }
+  // Then let the layout-recovery engine turn or nudge pieces that face into others or block doorways. Every candidate
+  // is fully revalidated and never adds an issue, so this only ever improves the plan.
+  const before = validateScene(scene).issues.length;
+  for (let round = 0; round < 6; round += 1) {
+    const best = generateRecoveryCandidates(scene, 1).candidates[0];
+    if (!best || best.issuesAfter >= best.issuesBefore) break;
+    scene = applySceneAction(scene, best.action).scene;
+  }
+  // Pieces read facing the wrong way (a wardrobe facing into its bed): turn them round when that clears issues.
+  for (const item of [...scene.furniture]) {
+    const current = validateScene(scene).issues;
+    if (!current.some((issue) => issue.ruleId === "clearance.front" && issue.objectIds[0] === item.id)) continue;
+    const turned = { ...scene, furniture: scene.furniture.map((entry) => (entry.id === item.id ? { ...entry, yawDegrees: (entry.yawDegrees + 180) % 360 } : entry)) };
+    if (validateScene(turned).issues.length < current.length) scene = turned;
+  }
+  const recovered = before - validateScene(scene).issues.length;
+  const notes = `${rooms.length} rooms, ${scene.furniture.length} pieces measured from the plan.`
+    + doorNotes
+    + (recovered > 0 ? ` Layout recovery cleared ${recovered} clearance/doorway issue${recovered === 1 ? "" : "s"}.` : "")
+    + (fixed ? ` ${fixed} touching piece${fixed === 1 ? " was" : "s were"} trimmed or moved apart.` : "")
+    + (dropped.length ? ` Removed to avoid collisions: ${dropped.join(", ")}.` : "")
+    + (skipped ? ` ${skipped} piece${skipped === 1 ? "" : "s"} without a catalog match were skipped.` : "");
   return { scene, notes, issues: validateScene(scene).issues, model: "engine" };
+}
+
+/** World-space segment of an opening along its wall line. */
+function openingSegment(room: Room, opening: Room["openings"][number]) {
+  const { width: w, depth: d, wallThickness: t } = room.dimensions;
+  const horizontal = opening.wall === "north" || opening.wall === "south";
+  const line = horizontal
+    ? room.position.z + (opening.wall === "north" ? -(d / 2 + t / 2) : d / 2 + t / 2)
+    : room.position.x + (opening.wall === "west" ? -(w / 2 + t / 2) : w / 2 + t / 2);
+  const centre = (horizontal ? room.position.x : room.position.z) + opening.offset;
+  return { horizontal, line, from: centre - opening.width / 2, to: centre + opening.width / 2, thickness: t };
+}
+
+/**
+ * One doorway between two rooms shows up on both rooms' walls. Both keep the gap (each room has its own wall), but only
+ * one gets the door leaf: the room where its swing area holds less furniture (ties: the smaller room, like a bedroom off
+ * a hall). The other side becomes an open passage, and the door swings into the room that keeps it. Returns a note.
+ */
+function settleDoors(rooms: Room[], furniture: FurnitureObject[]): string {
+  let paired = 0;
+  const area = (room: Room) => room.dimensions.width * room.dimensions.depth;
+  const crowding = (room: Room, opening: Room["openings"][number]) => {
+    const seg = openingSegment(room, opening);
+    const inward = opening.wall === "north" || opening.wall === "west" ? 1 : -1;
+    const zoneFrom = seg.line + inward * seg.thickness / 2;
+    const zoneTo = zoneFrom + inward * opening.width;
+    return furniture.filter((item) => item.roomId === room.id).filter((item) => {
+      const along = seg.horizontal ? item.position.x : item.position.z;
+      const across = seg.horizontal ? item.position.z : item.position.x;
+      const half = Math.max(item.dimensions.width, item.dimensions.depth) / 2;
+      return along + half > seg.from && along - half < seg.to && across + half > Math.min(zoneFrom, zoneTo) && across - half < Math.max(zoneFrom, zoneTo);
+    }).length;
+  };
+  for (const a of rooms) {
+    for (const opening of a.openings) {
+      if (opening.kind !== "door") continue;
+      const sa = openingSegment(a, opening);
+      for (const b of rooms) {
+        if (b === a) continue;
+        const match = b.openings.find((other) => {
+          if (other.kind === "window") return false;
+          const sb = openingSegment(b, other);
+          return sb.horizontal === sa.horizontal && Math.abs(sb.line - sa.line) <= (sa.thickness + sb.thickness) && Math.min(sa.to, sb.to) - Math.max(sa.from, sb.from) > Math.min(opening.width, other.width) * 0.4;
+        });
+        if (!match) continue;
+        if (match.kind === "passage") { opening.kind = "passage"; continue; }
+        const keepA = crowding(a, opening) < crowding(b, match) || (crowding(a, opening) === crowding(b, match) && area(a) <= area(b));
+        (keepA ? match : opening).kind = "passage";
+        (keepA ? opening : match).swing = "in";
+        paired += 1;
+      }
+    }
+  }
+  return paired ? ` ${paired} shared doorway${paired === 1 ? "" : "s"} given a single door.` : "";
+}
+
+/**
+ * Plans draw furniture touching (beds against nightstands, chairs tucked under tables), and measured outlines can run
+ * into each other or past a wall. Keep every piece inside its room and apart from the others: clamp into the room,
+ * then for each overlapping pair trim the larger piece back from the smaller one (or, if that would leave too little
+ * of it, push the smaller one out). Returns how many pieces were changed.
+ */
+function separateFurniture(rooms: Room[], furniture: FurnitureObject[]): number {
+  const gap = 0.01;
+  const changed = new Set<string>();
+  const box = (item: FurnitureObject) => {
+    const turned = Math.round(((item.yawDegrees % 180) + 180) % 180) === 90;
+    const w = turned ? item.dimensions.depth : item.dimensions.width;
+    const d = turned ? item.dimensions.width : item.dimensions.depth;
+    return { x0: item.position.x - w / 2, x1: item.position.x + w / 2, z0: item.position.z - d / 2, z1: item.position.z + d / 2, turned };
+  };
+  const write = (item: FurnitureObject, next: { x0: number; x1: number; z0: number; z1: number; turned: boolean }) => {
+    const w = fmt(Math.max(0.1, next.x1 - next.x0));
+    const d = fmt(Math.max(0.1, next.z1 - next.z0));
+    item.position = { ...item.position, x: fmt((next.x0 + next.x1) / 2), z: fmt((next.z0 + next.z1) / 2) };
+    item.dimensions = { ...item.dimensions, width: next.turned ? d : w, depth: next.turned ? w : d };
+    changed.add(item.id);
+  };
+  const clamp = () => furniture.forEach((item) => {
+    const room = rooms.find((entry) => entry.id === item.roomId);
+    if (!room) return;
+    const r = { x0: room.position.x - room.dimensions.width / 2 + gap, x1: room.position.x + room.dimensions.width / 2 - gap, z0: room.position.z - room.dimensions.depth / 2 + gap, z1: room.position.z + room.dimensions.depth / 2 - gap };
+    const b = box(item);
+    if (b.x0 >= r.x0 && b.x1 <= r.x1 && b.z0 >= r.z0 && b.z1 <= r.z1) return;
+    // Slide back inside first; only trim what still doesn't fit.
+    const dx = b.x0 < r.x0 ? r.x0 - b.x0 : b.x1 > r.x1 ? r.x1 - b.x1 : 0;
+    const dz = b.z0 < r.z0 ? r.z0 - b.z0 : b.z1 > r.z1 ? r.z1 - b.z1 : 0;
+    write(item, { x0: Math.max(b.x0 + dx, r.x0), x1: Math.min(b.x1 + dx, r.x1), z0: Math.max(b.z0 + dz, r.z0), z1: Math.min(b.z1 + dz, r.z1), turned: b.turned });
+  });
+  clamp();
+  for (let pass = 0; pass < 4; pass += 1) {
+    let moved = false;
+    for (const a of furniture) {
+      for (const c of furniture) {
+        if (a === c || a.roomId !== c.roomId) continue;
+        const A = box(a), C = box(c);
+        if (A.x1 <= C.x0 || C.x1 <= A.x0 || A.z1 <= C.z0 || C.z1 <= A.z0) continue;
+        const area = (b: typeof A) => (b.x1 - b.x0) * (b.z1 - b.z0);
+        if (area(A) < area(C)) continue;
+        // Cheapest side to separate on.
+        const options = [
+          { axis: "x" as const, cut: A.x1 - C.x0 + gap, low: true }, { axis: "x" as const, cut: C.x1 - A.x0 + gap, low: false },
+          { axis: "z" as const, cut: A.z1 - C.z0 + gap, low: true }, { axis: "z" as const, cut: C.z1 - A.z0 + gap, low: false },
+        ].sort((p, q) => p.cut - q.cut);
+        const best = options[0]!;
+        const size = best.axis === "x" ? A.x1 - A.x0 : A.z1 - A.z0;
+        if (best.cut < size * 0.35) {
+          // Trim the larger piece's face back from the smaller one.
+          if (best.axis === "x") best.low ? (A.x1 = C.x0 - gap) : (A.x0 = C.x1 + gap);
+          else best.low ? (A.z1 = C.z0 - gap) : (A.z0 = C.z1 + gap);
+          write(a, A);
+        } else {
+          // Push the smaller piece out of the larger one (the room clamp next pass may stop it; the engine check after
+          // assembly catches anything left).
+          if (best.axis === "x") { const shift = best.low ? A.x1 - C.x0 + gap : -(C.x1 - A.x0 + gap); C.x0 += shift; C.x1 += shift; }
+          else { const shift = best.low ? A.z1 - C.z0 + gap : -(C.z1 - A.z0 + gap); C.z0 += shift; C.z1 += shift; }
+          write(c, C);
+        }
+        moved = true;
+      }
+    }
+    clamp();
+    if (!moved) break;
+  }
+  return changed.size;
 }

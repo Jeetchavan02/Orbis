@@ -475,8 +475,34 @@ app.post("/api/ai/plan/house", async (request, response) => {
   }
 });
 
+/**
+ * Measurements come from image pixels, so a bad photo can produce out-of-range or missing numbers. Bring every number
+ * into the range the schema allows (and drop entries that can't be repaired) instead of rejecting the whole building.
+ */
+function sanitizeHouseRequest(body: unknown): unknown {
+  const house = (body as { house?: { height?: unknown; rooms?: unknown[] } } | null)?.house;
+  if (!house || !Array.isArray(house.rooms)) return body;
+  const num = (value: unknown, min: number, max: number, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
+  const rooms = house.rooms.slice(0, 30).flatMap((raw) => {
+    const room = raw as Record<string, unknown>;
+    if (typeof room.x !== "number" || typeof room.z !== "number" || !Number.isFinite(room.x) || !Number.isFinite(room.z)) return [];
+    const width = num(room.width, 0.3, 60, 3);
+    const depth = num(room.depth, 0.3, 60, 3);
+    const openings = (Array.isArray(room.openings) ? room.openings : []).slice(0, 24).filter((o) => {
+      const opening = o as Record<string, unknown>;
+      return typeof opening.offset === "number" && Number.isFinite(opening.offset) && typeof opening.width === "number" && opening.width > 0;
+    });
+    const objects = (Array.isArray(room.objects) ? room.objects : []).slice(0, 24).filter((o) => {
+      const object = o as Record<string, unknown>;
+      return [object.x, object.z, object.width, object.depth, object.yawDegrees].every((value) => typeof value === "number" && Number.isFinite(value)) && (object.width as number) > 0 && (object.depth as number) > 0;
+    });
+    return [{ ...room, name: String(room.name || "Room").slice(0, 80), width, depth, wallThickness: num(room.wallThickness, 0.05, 0.6, 0.15), openings, objects }];
+  });
+  return { ...(body as object), house: { ...house, name: String((house as { name?: unknown }).name || "Floor plan").slice(0, 80), height: num(house.height, 2, 6, 2.8), rooms } };
+}
+
 app.post("/api/ai/plan/house/build", (request, response) => {
-  const parsed = AiHouseBuildRequestSchema.safeParse(request.body);
+  const parsed = AiHouseBuildRequestSchema.safeParse(sanitizeHouseRequest(request.body));
   if (!parsed.success) return response.status(400).json({ error: "Invalid request: " + parsed.error.issues[0]?.message });
   try {
     response.json(assembleHouse(parsed.data.house, parsed.data.catalog, newId));

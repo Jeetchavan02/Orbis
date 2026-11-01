@@ -35,7 +35,7 @@ export type CatalogItem = {
   light?: LightFixture;
   constraints?: ObjectConstraints;
   /** Doors and windows become room openings instead of furniture. */
-  opening?: { kind: "door" | "window"; width: number; height: number; sillHeight: number };
+  opening?: { kind: "door" | "window" | "passage"; width: number; height: number; sillHeight: number };
 };
 
 export const CATEGORY_LABELS: Record<FurnitureCategory, string> = {
@@ -393,6 +393,9 @@ for (const swatch of [{ name: "Red", color: "#d2574e" }, { name: "Mint", color: 
 // ---------- Doors & windows (become room openings) ----------
 for (const [label, w] of [["Single door", 0.85], ["Wide door", 1.0], ["Double door", 1.5]] as const) {
   add({ name: label, category: "other", group: "openings", family: "door", dimensions: { width: w, depth: 0.1, height: 2.05 }, color: "#d9cbb6", params: {}, rooms: ["bedroom", "living", "dining", "kitchen", "bathroom", "office", "study", "kids", "outdoor"], opening: { kind: "door", width: w, height: 2.05, sillHeight: 0 } });
+}
+for (const [label, w] of [["Open doorway", 0.9], ["Wide opening", 1.6]] as const) {
+  add({ name: label, category: "other", group: "openings", family: "door", dimensions: { width: w, depth: 0.1, height: 2.1 }, color: "#e8e2d8", params: {}, rooms: ["bedroom", "living", "dining", "kitchen", "bathroom", "office", "study", "kids", "outdoor"], opening: { kind: "passage", width: w, height: 2.1, sillHeight: 0 } });
 }
 for (const [label, w, h, sill] of [["Window", 1.2, 1.3, 0.9], ["Wide window", 1.8, 1.4, 0.85], ["Tall window", 0.9, 2.0, 0.3]] as const) {
   add({ name: label, category: "other", group: "openings", family: "window", dimensions: { width: w, depth: 0.1, height: h }, color: "#cfe6f3", params: {}, rooms: ["bedroom", "living", "dining", "kitchen", "bathroom", "office", "study", "kids"], opening: { kind: "window", width: w, height: h, sillHeight: sill } });
