@@ -1,3 +1,4 @@
+import { localStorage } from "./storage.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ beforeAll(async () => {
   console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
   const app = express();
   app.use(express.json());
-  app.use("/api/auth", new Accounts(dir, { production: false, googleClientId: null, showResetLinks: true }).router());
+  app.use("/api/auth", new Accounts(dir, localStorage(dir).accounts, { production: false, googleClientId: null, showResetLinks: true }).router());
   server = app.listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

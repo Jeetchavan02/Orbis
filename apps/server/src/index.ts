@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -9,8 +9,9 @@ import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
 import { AiQuotaError, AiUnavailableError, aiModel, assembleRoom, runAiEdit, runBriefToRoom, runImageToRoom, runPlanAnalyze } from "./ai.js";
-import { SceneSession, type ClientHandle, type LinkAccess } from "./sessions.js";
+import { SceneSession, type ClientHandle } from "./sessions.js";
 import { Accounts } from "./auth.js";
+import { assetKey, createStorage, reportKey, sceneKey, thumbnailKey } from "./storage.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Secrets live in apps/.env (or server/.env); they are only ever read on the server.
@@ -28,12 +29,9 @@ const DATA_ROOT = process.env.RB_DATA_DIR ? resolve(process.env.RB_DATA_DIR) : r
  */
 const PUBLIC = process.env.RB_PUBLIC ? process.env.RB_PUBLIC === "1" : PRODUCTION;
 const WEB_DIST = resolve(here, "../../web/dist");
-const DATA_DIR = resolve(DATA_ROOT, "scenes");
 const DEFAULT_FIXTURE = resolve(here, "../../fixtures/bedroom-scene.json");
 const SCENE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const AUTOSAVE_DELAY_MS = 1500;
-const THUMB_DIR = resolve(DATA_ROOT, "thumbnails");
-const OWNERS_FILE = resolve(DATA_ROOT, "owners.json");
 const FIXTURES = resolve(here, "../../fixtures");
 /** Starting points offered by the homepage; each validates cleanly with the spatial engine. */
 const TEMPLATE_FILES: Record<string, string> = {
@@ -47,10 +45,20 @@ const TEMPLATE_FILES: Record<string, string> = {
 
 const app = express();
 // Behind Railway/Render/Fly the TLS proxy sets X-Forwarded-Proto; trust it so secure cookies and https links work.
-app.set("trust proxy", 1);
+// On AWS the chain is CloudFront → ALB → EC2, so RB_TRUST_PROXY=2 there.
+app.set("trust proxy", Number(process.env.RB_TRUST_PROXY ?? 1));
+/**
+ * On AWS free mode CloudFront reaches the instance directly; its security group already only admits CloudFront,
+ * and this header (set on our distribution only) shuts out requests routed through anyone else's distribution.
+ */
+const ORIGIN_SECRET = process.env.RB_ORIGIN_SECRET?.trim() || null;
+const fromOurCdn = (header: string | string[] | undefined) => !ORIGIN_SECRET || header === ORIGIN_SECRET;
+app.use((request, response, next) => (fromOurCdn(request.headers["x-orbis-origin"]) ? next() : response.status(403).send("Forbidden")));
 app.use(express.json({ limit: "40mb" }));
 
-const accounts = new Accounts(DATA_ROOT, {
+/** Local data directory (default) or S3 + DynamoDB (RB_STORAGE=aws); see storage.ts. */
+const storage = await createStorage(DATA_ROOT);
+const accounts = new Accounts(DATA_ROOT, storage.accounts, {
   production: PRODUCTION,
   googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || null,
   // Without an email provider, reset links are logged on the server; dev/demo builds also show them on the page.
@@ -64,33 +72,40 @@ const sessions = new Map<string, Promise<SceneSession>>();
 const saveTimers = new Map<string, NodeJS.Timeout>();
 const lastSaved = new Map<string, string>();
 
-const scenePath = (id: string) => resolve(DATA_DIR, id + ".json");
+async function readScene(id: string): Promise<Scene | null> {
+  const bytes = await storage.blobs.get(sceneKey(id));
+  return bytes ? SceneSchema.parse(JSON.parse(bytes.toString("utf8"))) : null;
+}
 
 async function loadInitialScene(id: string): Promise<Scene> {
+  // A storage outage must not be mistaken for "no such project" (that would overwrite it with the demo scene).
+  let bytes: Buffer | null;
   try {
-    return SceneSchema.parse(JSON.parse(await readFile(scenePath(id), "utf8")));
+    bytes = await storage.blobs.get(sceneKey(id));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(`Saved scene "${id}" is unreadable; starting from the demo scene.`, error);
-    }
-    const scene = SceneSchema.parse(JSON.parse(await readFile(DEFAULT_FIXTURE, "utf8")));
-    return { ...scene, id };
+    console.error(`Could not read scene "${id}" from storage`, error);
+    throw error;
   }
+  try {
+    if (bytes) return SceneSchema.parse(JSON.parse(bytes.toString("utf8")));
+  } catch (error) {
+    console.error(`Saved scene "${id}" is unreadable; starting from the demo scene.`, error);
+  }
+  const scene = SceneSchema.parse(JSON.parse(await readFile(DEFAULT_FIXTURE, "utf8")));
+  return { ...scene, id };
 }
 
 async function persist(id: string, session: SceneSession) {
   // A deleted project's last autosave must not bring its file back.
   const live = sessions.get(id);
   if (!live || (await live) !== session) return;
-  await mkdir(DATA_DIR, { recursive: true });
-  const target = scenePath(id);
-  const temp = target + ".tmp";
-  await writeFile(temp, JSON.stringify(session.scene, null, 2));
-  await rename(temp, target);
-  session.dirty = false;
+  const scene = session.scene;
+  await writeProject(scene);
+  // Only clear the flag if nothing changed while the write was in flight.
+  if (session.scene === scene) session.dirty = false;
   const savedAt = new Date().toISOString();
   lastSaved.set(id, savedAt);
-  session.broadcast({ type: "saved", savedAt, path: PRODUCTION ? "server" : "server/data/scenes/" + id + ".json" });
+  session.broadcast({ type: "saved", savedAt, path: storage.kind === "aws" ? "cloud" : PRODUCTION ? "server" : "server/data/scenes/" + id + ".json" });
 }
 
 function scheduleSave(id: string, session: SceneSession, immediate = false) {
@@ -98,7 +113,9 @@ function scheduleSave(id: string, session: SceneSession, immediate = false) {
   saveTimers.set(id, setTimeout(() => {
     persist(id, session).catch((error) => {
       console.error(`Failed to save scene "${id}"`, error);
-      session.broadcast({ type: "error", message: "Saving failed on the server: " + (error as Error).message });
+      session.broadcast({ type: "error", message: "Saving failed on the server; retrying: " + (error as Error).message });
+      // Keep the changes in memory and try again, so a storage blip never drops edits.
+      if (sessions.has(id)) saveTimers.set(id, setTimeout(() => scheduleSave(id, session, true), 5000));
     });
   }, immediate ? 0 : AUTOSAVE_DELAY_MS));
 }
@@ -106,12 +123,14 @@ function scheduleSave(id: string, session: SceneSession, immediate = false) {
 function getSession(id: string): Promise<SceneSession> {
   let session = sessions.get(id);
   if (!session) {
-    session = Promise.all([loadInitialScene(id), loadLinkAccess()]).then(([scene, access]) => {
+    session = Promise.all([loadInitialScene(id), storage.projects.get(id)]).then(([scene, meta]) => {
       const created = new SceneSession(scene, (changed, immediate) => scheduleSave(id, changed, immediate));
-      created.linkAccess = access[id] ?? "edit";
+      created.linkAccess = meta?.linkAccess ?? "edit";
       return created;
     });
     sessions.set(id, session);
+    // A failed load must not stay cached: the next request tries again.
+    session.catch(() => sessions.delete(id));
   }
   return session;
 }
@@ -120,133 +139,79 @@ app.get("/api/health", (_request, response) => {
   response.status(200).json(ApiHealthSchema.parse({ status: "ok", service: "reality-builder-api", timestamp: new Date().toISOString() }));
 });
 
-// ---------- Projects (one JSON scene file per project) ----------
-const thumbPath = (id: string) => resolve(THUMB_DIR, id + ".jpg");
+// ---------- Projects (one scene document per project + a metadata record) ----------
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) || "project";
 const newProjectId = (name: string) => `${slug(name)}-${randomUUID().slice(0, 4)}`;
 
 async function currentScene(id: string): Promise<Scene | null> {
   const live = sessions.get(id);
   if (live) return (await live).scene;
-  try {
-    return SceneSchema.parse(JSON.parse(await readFile(scenePath(id), "utf8")));
-  } catch {
-    return null;
-  }
+  return readScene(id).catch(() => null);
 }
 
 // ---------- Owner keys: whoever created a project gets a secret that is required to delete it ----------
 const hashKey = (key: string) => createHash("sha256").update(key).digest("hex");
-let owners: Record<string, string> | null = null;
-async function loadOwners() {
-  if (owners) return owners;
-  try {
-    owners = JSON.parse(await readFile(OWNERS_FILE, "utf8")) as Record<string, string>;
-  } catch {
-    owners = {};
-  }
-  return owners;
-}
-async function setOwner(id: string, key: string | null) {
-  const map = await loadOwners();
-  if (key) map[id] = hashKey(key);
-  else delete map[id];
-  await mkdir(DATA_ROOT, { recursive: true });
-  await writeFile(OWNERS_FILE + ".tmp", JSON.stringify(map, null, 2));
-  await rename(OWNERS_FILE + ".tmp", OWNERS_FILE);
-}
 /** Creates the owner key for a new project and returns it (only the hash is stored). */
 async function claim(id: string) {
   const key = randomUUID();
-  await setOwner(id, key);
+  await storage.projects.update(id, { ownerKeyHash: hashKey(key) });
   return key;
 }
 async function isOwner(id: string, key: string | undefined) {
-  const hash = (await loadOwners())[id];
+  const hash = (await storage.projects.get(id))?.ownerKeyHash;
   if (!hash) return !PUBLIC; // Projects made before owner keys existed: deletable locally, never on the public server.
   return !!key && hashKey(key) === hash;
 }
-
-// ---------- Project owners (account id) ----------
-const PROJECT_USERS_FILE = resolve(DATA_ROOT, "project-owners.json");
-let projectUsers: Record<string, string> | null = null;
-async function loadProjectUsers() {
-  if (projectUsers) return projectUsers;
-  try {
-    projectUsers = JSON.parse(await readFile(PROJECT_USERS_FILE, "utf8")) as Record<string, string>;
-  } catch {
-    projectUsers = {};
-  }
-  return projectUsers;
-}
-async function setProjectUser(id: string, userId: string | null) {
-  const map = await loadProjectUsers();
-  if (userId) map[id] = userId;
-  else delete map[id];
-  await mkdir(DATA_ROOT, { recursive: true });
-  await writeFile(PROJECT_USERS_FILE + ".tmp", JSON.stringify(map, null, 2));
-  await rename(PROJECT_USERS_FILE + ".tmp", PROJECT_USERS_FILE);
-}
-
-// ---------- Link access: "edit" (default) or "view"; only owners can change it ----------
-const LINK_ACCESS_FILE = resolve(DATA_ROOT, "link-access.json");
-let linkAccess: Record<string, LinkAccess> | null = null;
-async function loadLinkAccess() {
-  if (linkAccess) return linkAccess;
-  try {
-    linkAccess = JSON.parse(await readFile(LINK_ACCESS_FILE, "utf8")) as Record<string, LinkAccess>;
-  } catch {
-    linkAccess = {};
-  }
-  return linkAccess;
-}
-async function setLinkAccess(id: string, access: LinkAccess | null) {
-  const map = await loadLinkAccess();
-  if (access === "view") map[id] = "view";
-  else delete map[id];
-  await mkdir(DATA_ROOT, { recursive: true });
-  await writeFile(LINK_ACCESS_FILE + ".tmp", JSON.stringify(map, null, 2));
-  await rename(LINK_ACCESS_FILE + ".tmp", LINK_ACCESS_FILE);
-}
 /** Owner = the signed-in account that created the project, or whoever holds its owner key. */
 async function ownsProject(id: string, user: { id: string } | null, key: string | undefined) {
-  if (user && (await loadProjectUsers())[id] === user.id) return true;
+  if (user && (await storage.projects.get(id))?.ownerUserId === user.id) return true;
   return isOwner(id, key);
 }
 
-const sceneExists = (id: string) => sessions.has(id) || existsSync(scenePath(id));
+async function sceneExists(id: string) {
+  return sessions.has(id) || (await storage.blobs.stat(sceneKey(id))) !== null;
+}
 
+/** Saves the scene document and refreshes the list summary kept in the project record. */
 async function writeProject(scene: Scene) {
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(scenePath(scene.id), JSON.stringify(scene, null, 2));
+  await storage.blobs.put(sceneKey(scene.id), JSON.stringify(scene, null, 2), "application/json");
+  await storage.projects.update(scene.id, {
+    name: scene.name, roomType: scene.roomType ?? (scene.rooms.length > 1 ? "apartment" : "bedroom"),
+    objects: scene.furniture.length, floors: scene.rooms.length, updatedAt: new Date().toISOString(),
+  });
+}
+
+async function thumbnailUrl(id: string, stamp: number | undefined) {
+  const version = stamp ?? (await storage.blobs.stat(thumbnailKey(id)))?.getTime();
+  return version ? `/api/projects/${id}/thumbnail?v=${version}` : null;
 }
 
 app.get("/api/projects", async (request, response) => {
-  await mkdir(DATA_DIR, { recursive: true });
   // On a public server nobody gets a list of everyone's projects: the browser asks for the ids it knows.
   const wanted = new Set(typeof request.query.ids === "string" ? request.query.ids.split(",").filter((id) => SCENE_ID_PATTERN.test(id)) : []);
   const user = await accounts.userFor(request);
-  const ownerOf = await loadProjectUsers();
   // Signed in: your own projects plus the ones you opened from a share link.
   if (user) {
-    for (const [id, owner] of Object.entries(ownerOf)) if (owner === user.id) wanted.add(id);
+    for (const id of await storage.projects.ownedBy(user.id)) wanted.add(id);
     for (const id of user.recent) wanted.add(id);
   }
-  let files = (await readdir(DATA_DIR)).filter((file) => file.endsWith(".json"));
-  if (PUBLIC) files = files.filter((file) => wanted.has(file.replace(/\.json$/, "")));
-  const projects = [];
-  for (const file of files) {
-    const id = file.replace(/\.json$/, "");
-    const scene = await currentScene(id);
-    if (!scene) continue;
-    const info = await stat(scenePath(id));
-    projects.push({
-      id, name: scene.name, roomType: scene.roomType ?? (scene.rooms.length > 1 ? "apartment" : "bedroom"),
-      objects: scene.furniture.length, floors: scene.rooms.length, updatedAt: info.mtime.toISOString(),
-      owned: !!user && ownerOf[id] === user.id, shared: !!user && !!ownerOf[id] && ownerOf[id] !== user.id,
-      thumbnail: existsSync(thumbPath(id)) ? `/api/projects/${id}/thumbnail?v=${(await stat(thumbPath(id))).mtimeMs}` : null,
-    });
-  }
+  const ids = PUBLIC ? [...wanted] : [...new Set([...(await storage.projects.ids()), ...wanted])];
+  const projects = (await Promise.all(ids.map(async (id) => {
+    const meta = await storage.projects.get(id);
+    const live = sessions.get(id) ? (await sessions.get(id)!).scene : null;
+    // Records written before the summary existed (local data, migrated data) fall back to reading the scene.
+    const scene = live ?? (meta?.name === undefined ? await currentScene(id) : null);
+    if (!scene && meta?.name === undefined) return null;
+    const updated = meta?.updatedAt ?? (await storage.blobs.stat(sceneKey(id)))?.toISOString();
+    if (!updated) return null;
+    const owner = meta?.ownerUserId;
+    return {
+      id, name: scene?.name ?? meta!.name!, roomType: scene ? (scene.roomType ?? (scene.rooms.length > 1 ? "apartment" : "bedroom")) : meta!.roomType ?? "bedroom",
+      objects: scene?.furniture.length ?? meta!.objects ?? 0, floors: scene?.rooms.length ?? meta!.floors ?? 1, updatedAt: updated,
+      owned: !!user && owner === user.id, shared: !!user && !!owner && owner !== user.id,
+      thumbnail: await thumbnailUrl(id, meta?.thumbnailAt),
+    };
+  }))).filter((project) => project !== null);
   projects.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   response.json({ projects });
 });
@@ -277,7 +242,7 @@ app.post("/api/projects", async (request, response) => {
   const id = newProjectId(title);
   scene = { ...scene, id, name: title, roomType: roomType || scene.roomType };
   await writeProject(scene);
-  if (user) await setProjectUser(id, user.id);
+  if (user) await storage.projects.update(id, { ownerUserId: user.id });
   response.status(201).json({ id, ownerKey: await claim(id) });
 });
 
@@ -290,8 +255,10 @@ app.post("/api/projects/:id/duplicate", async (request, response) => {
   const name = scene.name + " (copy)";
   const id = newProjectId(name);
   await writeProject({ ...scene, id, name });
-  if (user) await setProjectUser(id, user.id);
-  if (existsSync(thumbPath(request.params.id))) await copyFile(thumbPath(request.params.id), thumbPath(id));
+  if (user) await storage.projects.update(id, { ownerUserId: user.id });
+  await storage.blobs.copy(thumbnailKey(request.params.id), thumbnailKey(id));
+  const thumbnailAt = (await storage.projects.get(request.params.id))?.thumbnailAt;
+  if (thumbnailAt) await storage.projects.update(id, { thumbnailAt });
   response.status(201).json({ id, ownerKey: await claim(id) });
 });
 
@@ -319,9 +286,9 @@ app.put("/api/projects/:id/access", async (request, response) => {
   if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
   const access = (request.body as { linkAccess?: unknown } | undefined)?.linkAccess;
   if (access !== "edit" && access !== "view") return response.status(400).json({ error: "linkAccess must be \"edit\" or \"view\"." });
-  if (!sceneExists(id)) return response.status(404).json({ error: "Project not found." });
+  if (!(await sceneExists(id))) return response.status(404).json({ error: "Project not found." });
   if (!(await ownsProject(id, await accounts.userFor(request), request.get("x-owner-key")))) return response.status(403).json({ error: "Only the project owner can change link access." });
-  await setLinkAccess(id, access);
+  await storage.projects.update(id, { linkAccess: access });
   (await getSession(id)).setLinkAccess(access);
   response.json({ linkAccess: access });
 });
@@ -330,19 +297,23 @@ app.delete("/api/projects/:id", async (request, response) => {
   const id = request.params.id;
   if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
   const user = await accounts.userFor(request);
-  const ownedByUser = !!user && (await loadProjectUsers())[id] === user.id;
+  const ownedByUser = !!user && (await storage.projects.get(id))?.ownerUserId === user.id;
   if (!ownedByUser && !(await isOwner(id, request.get("x-owner-key")))) return response.status(403).json({ error: "Only the person who created this project can delete it." });
   const live = sessions.get(id);
   sessions.delete(id);
   clearTimeout(saveTimers.get(id));
   saveTimers.delete(id);
   if (live) (await live).closeAll({ type: "project-deleted" });
-  await setOwner(id, null);
-  await setProjectUser(id, null);
-  await setLinkAccess(id, null);
+  // The record and scene go first, so the project is gone at once; its files (thumbnail, reports) are removed
+  // by the background worker when a queue is configured, otherwise right here.
+  await storage.projects.remove(id);
+  await storage.blobs.delete(sceneKey(id));
   await accounts.forgetProject(id);
-  await unlink(scenePath(id)).catch(() => undefined);
-  await unlink(thumbPath(id)).catch(() => undefined);
+  const queued = await storage.jobs.send({ type: "delete-project", projectId: id }).catch((error) => {
+    console.error("Could not queue project cleanup; cleaning up inline", error);
+    return false;
+  });
+  if (!queued) await storage.blobs.deletePrefix(`projects/${id}/`);
   response.json({ ok: true });
 });
 
@@ -351,17 +322,18 @@ app.put("/api/projects/:id/thumbnail", async (request, response) => {
   const dataUrl = String((request.body as { dataUrl?: string })?.dataUrl ?? "");
   const match = /^data:image\/jpeg;base64,(.+)$/.exec(dataUrl);
   if (!SCENE_ID_PATTERN.test(id) || !match) return response.status(400).json({ error: "Expected a JPEG data URL." });
-  await mkdir(THUMB_DIR, { recursive: true });
-  await writeFile(thumbPath(id), Buffer.from(match[1]!, "base64"));
+  if (!(await sceneExists(id))) return response.status(404).json({ error: "Project not found." });
+  await storage.blobs.put(thumbnailKey(id), Buffer.from(match[1]!, "base64"), "image/jpeg");
+  await storage.projects.update(id, { thumbnailAt: Date.now() });
   response.json({ ok: true });
 });
 
-// Uploaded images (photo cutouts, floor-plan underlays) and imported 3D models, stored in the data dir.
-const ASSET_DIR = resolve(DATA_ROOT, "assets");
+// Uploaded images (photo cutouts, floor-plan underlays) and imported 3D models. Uploads go through the server
+// (not straight to S3) so the type, size and GLB header are checked before anything is stored.
 const ASSET_FILE = /^[a-z0-9-]{8,64}\.(png|jpg|webp|glb)$/;
 const IMAGE_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 app.post("/api/assets", async (request, response) => {
-  const body = (request.body ?? {}) as { dataUrl?: string; kind?: string };
+  const body = (request.body ?? {}) as { dataUrl?: string; kind?: string; projectId?: string };
   const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,(.+)$/.exec(String(body.dataUrl ?? ""));
   const ext = match ? (IMAGE_TYPES[match[1]!] ?? (match[1] === "model/gltf-binary" || match[1] === "application/octet-stream" ? "glb" : null)) : null;
   if (!match || !ext) return response.status(400).json({ error: "Expected a PNG, JPG, WebP or GLB data URL." });
@@ -371,28 +343,66 @@ app.post("/api/assets", async (request, response) => {
   if (ext === "glb" && bytes.subarray(0, 4).toString("latin1") !== "glTF") return response.status(400).json({ error: "That isn't a valid .glb file." });
   const prefix = ext === "glb" ? "model" : body.kind === "plan" ? "plan" : "cutout";
   const file = `${prefix}-${randomUUID().slice(0, 12)}.${ext}`;
-  await mkdir(ASSET_DIR, { recursive: true });
-  await writeFile(resolve(ASSET_DIR, file), bytes);
+  const project = typeof body.projectId === "string" && SCENE_ID_PATTERN.test(body.projectId) ? body.projectId : undefined;
+  await storage.blobs.put(assetKey(file), bytes, ext === "glb" ? "model/gltf-binary" : "image/" + (ext === "jpg" ? "jpeg" : ext), project ? { project } : undefined);
   response.json({ id: file.replace(/\.[a-z]+$/, ""), url: `/api/assets/${file}` });
 });
-app.get("/api/assets/:file", (request, response) => {
+/** Streams a stored file from the same origin (keeps WebGL textures untainted for the PDF export). */
+async function sendBlob(response: express.Response, key: string, type: string, cache: string) {
+  const blob = await storage.blobs.open(key);
+  if (!blob) return response.status(404).end();
+  response.setHeader("Cache-Control", cache);
+  response.type(type);
+  if (blob.length !== undefined) response.setHeader("Content-Length", String(blob.length));
+  blob.body.on("error", () => response.destroy());
+  blob.body.pipe(response);
+}
+
+app.get("/api/assets/:file", async (request, response) => {
   const file = request.params.file;
-  const path = resolve(ASSET_DIR, file);
-  if (!ASSET_FILE.test(file) || !existsSync(path)) return response.status(404).end();
-  response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  if (file.endsWith(".glb")) response.type("model/gltf-binary");
-  response.sendFile(path);
+  if (!ASSET_FILE.test(file)) return response.status(404).end();
+  const ext = file.split(".").pop()!;
+  await sendBlob(response, assetKey(file), ext === "glb" ? "model/gltf-binary" : ext === "jpg" ? "image/jpeg" : "image/" + ext, "public, max-age=31536000, immutable");
 });
 
-app.get("/api/projects/:id/thumbnail", (request, response) => {
+app.get("/api/projects/:id/thumbnail", async (request, response) => {
   const id = request.params.id;
-  if (!SCENE_ID_PATTERN.test(id) || !existsSync(thumbPath(id))) return response.status(404).end();
-  response.sendFile(thumbPath(id));
+  if (!SCENE_ID_PATTERN.test(id)) return response.status(404).end();
+  await sendBlob(response, thumbnailKey(id), "image/jpeg", "public, max-age=300");
+});
+
+// ---------- Design PDF reports: kept with the project so a download link can be shared ----------
+const REPORT_FILE = /^[A-Za-z0-9_-]{1,80}-[a-f0-9]{8}\.pdf$/;
+app.post("/api/projects/:id/reports", express.raw({ type: "application/pdf", limit: "40mb" }), async (request, response) => {
+  const id = request.params.id;
+  if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
+  const bytes = request.body as Buffer;
+  if (!Buffer.isBuffer(bytes) || bytes.subarray(0, 5).toString("latin1") !== "%PDF-") return response.status(400).json({ error: "Expected a PDF." });
+  if (!(await sceneExists(id))) return response.status(404).json({ error: "Project not found." });
+  const base = String(request.query.name ?? "Orbis_Design").replace(/\.pdf$/i, "").replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80) || "Orbis_Design";
+  const file = `${base}-${randomUUID().replace(/-/g, "").slice(0, 8)}.pdf`;
+  await storage.blobs.put(reportKey(id, file), bytes, "application/pdf");
+  response.status(201).json({ url: `/api/projects/${id}/reports/${file}` });
+});
+app.get("/api/projects/:id/reports/:file", async (request, response) => {
+  const { id, file } = request.params;
+  if (!SCENE_ID_PATTERN.test(id) || !REPORT_FILE.test(file)) return response.status(404).end();
+  const key = reportKey(id, file);
+  if (!(await storage.blobs.stat(key))) return response.status(404).end();
+  const name = file.replace(/-[a-f0-9]{8}\.pdf$/, ".pdf");
+  // On S3: a 15-minute presigned link, so large PDFs download straight from S3 instead of through the server.
+  const direct = await storage.blobs.downloadUrl(key, name, "application/pdf");
+  if (direct) {
+    response.setHeader("Cache-Control", "no-store");
+    return response.redirect(302, direct);
+  }
+  response.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  await sendBlob(response, key, "application/pdf", "private, max-age=3600");
 });
 
 app.get("/api/scenes/:id", async (request, response) => {
   if (!SCENE_ID_PATTERN.test(request.params.id)) return response.status(400).json({ error: "Invalid scene id." });
-  if (PUBLIC && !sceneExists(request.params.id)) return response.status(404).json({ error: "Project not found." });
+  if (PUBLIC && !(await sceneExists(request.params.id))) return response.status(404).json({ error: "Project not found." });
   const session = await getSession(request.params.id);
   response.json({ scene: session.scene, seq: session.seq, savedAt: lastSaved.get(request.params.id) ?? null });
 });
@@ -490,6 +500,10 @@ setInterval(() => {
 }, 25_000).unref();
 
 websocketServer.on("connection", (socket: WebSocket, request) => {
+  if (!fromOurCdn(request.headers["x-orbis-origin"])) {
+    socket.close(1008, "Forbidden");
+    return;
+  }
   const url = new URL(request.url ?? "/ws", "http://localhost");
   const sceneId = url.searchParams.get("scene") ?? "default";
   if (!SCENE_ID_PATTERN.test(sceneId)) {
@@ -497,10 +511,6 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     return;
   }
   // A link to a project that doesn't exist (typo, deleted) must not silently create a new one on a public server.
-  if (PUBLIC && !sceneExists(sceneId)) {
-    socket.close(4004, "Project not found");
-    return;
-  }
   alive.set(socket, true);
   socket.on("pong", () => alive.set(socket, true));
   // Signed-in collaborators see projects they've joined on their dashboard.
@@ -512,14 +522,26 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     close: () => socket.close(4000, "Replaced by a newer connection from the same tab"),
   };
   const ownerKey = url.searchParams.get("key") ?? undefined;
-  const ready = Promise.all([getSession(sceneId), accounts.userFromCookie(request.headers.cookie).catch(() => null)]).then(async ([session, user]) => {
+  const exists = PUBLIC ? sceneExists(sceneId) : Promise.resolve(true);
+  const ready = exists.then((found) => {
+    if (!found) {
+      socket.close(4004, "Project not found");
+      throw new Error("missing project");
+    }
+  }).then(() => Promise.all([getSession(sceneId), accounts.userFromCookie(request.headers.cookie).catch(() => null)]).then(async ([session, user]) => {
     handle.owner = await ownsProject(sceneId, user, ownerKey);
     session.connect(handle);
     return session;
+  }));
+  ready.catch((error) => {
+    if ((error as Error).message === "missing project") return;
+    console.error(`Could not open project "${sceneId}"`, error);
+    socket.close(1011, "Project could not be loaded");
   });
 
   socket.on("message", async (data) => {
-    const session = await ready;
+    const session = await ready.catch(() => null);
+    if (!session) return;
     let payload: unknown;
     try {
       payload = JSON.parse(String(data));
@@ -530,7 +552,7 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     session.handle(handle, payload);
   });
 
-  socket.on("close", async () => (await ready).disconnect(handle));
+  socket.on("close", () => void ready.then((session) => session.disconnect(handle), () => undefined));
   socket.on("error", (error) => console.error("WebSocket error", error));
 });
 
@@ -557,7 +579,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 server.listen(port, HOST, () => {
-  console.log(`Orbis ${PRODUCTION ? "server" : "API"} listening at http://${HOST}:${port}${PUBLIC ? " (public mode)" : ""} · data in ${DATA_ROOT}`);
+  console.log(`Orbis ${PRODUCTION ? "server" : "API"} listening at http://${HOST}:${port}${PUBLIC ? " (public mode)" : ""} · ${storage.describe}`);
 });
 
 async function shutdown() {

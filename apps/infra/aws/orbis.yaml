@@ -1,0 +1,661 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Orbis on AWS. Mode "free" (default): CloudFront (HTTPS/WSS) -> one free-tier t3.micro with an Elastic IP in a
+  public subnet, reachable only from CloudFront. Mode "standard": CloudFront -> ALB -> t4g.small in a private
+  subnet (+ optional NAT). Both: Auto Scaling group of 1 for self-healing, scenes and files in S3, records in
+  DynamoDB, cleanup jobs through SQS + Lambda, S3/DynamoDB traffic on gateway VPC endpoints.
+
+Parameters:
+  Mode:
+    Type: String
+    Default: free
+    AllowedValues: [free, standard]
+    Description: >-
+      free = only free-tier-eligible resources (t3.micro, no load balancer, no NAT gateway).
+      standard = ALB + private subnet + t4g.small (+ NAT gateway if EnableNat).
+  UseCloudFront:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Free mode only. "false": HTTPS is served by Caddy on the instance with a free Let's Encrypt certificate for
+      <elastic-ip>.sslip.io (works on accounts not yet verified for CloudFront). "true": CloudFront in front.
+      Standard mode always uses CloudFront.
+  EnableNat:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      NAT gateway for outbound internet from the private subnet (Gemini AI, Google sign-in, SSM deploys).
+      "false" saves ~US$35/month; the app still runs (S3/DynamoDB use the endpoints) but AI and SSM commands won't.
+      Only used in standard mode (free mode has a public IP and needs no NAT).
+  CloudFrontPrefixListId:
+    Type: String
+    Description: Managed prefix list com.amazonaws.global.cloudfront.origin-facing for this region (deploy.mjs looks it up).
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+    Description: Header value CloudFront sends to the ALB; requests without it get 403 (deploy.mjs generates it).
+  ReleaseKey:
+    Type: String
+    Default: _releases/latest.tgz
+    Description: S3 key of the application bundle inside the data bucket.
+
+Conditions:
+  Free: !Equals [!Ref Mode, free]
+  Standard: !Equals [!Ref Mode, standard]
+  WithNat: !And [!Condition Standard, !Equals [!Ref EnableNat, "true"]]
+  UsEast1: !Equals [!Ref "AWS::Region", us-east-1]
+  Caddy: !And [!Condition Free, !Equals [!Ref UseCloudFront, "false"]]
+  WithCloudFront: !Not [!Condition Caddy]
+
+Mappings:
+  CloudFront:
+    Policies:
+      CachingDisabled: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+      CachingOptimized: 658327ea-f89d-4fab-a63d-7e88639e58f6
+      AllViewerAndCloudFrontHeaders: 33f36d7e-f396-46d9-90e0-52428a34d9dc
+
+Resources:
+  # ------------------------------------------------------------------ network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: orbis }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: orbis-public-a }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: orbis-public-b }]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: orbis-private-a }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: orbis-private-b }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: orbis-public }] }
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties: { RouteTableId: !Ref PublicRouteTable, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref InternetGateway }
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRouteTable }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRouteTable }
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: orbis-private }] }
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable }
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Condition: WithNat
+    Properties: { Domain: vpc }
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: WithNat
+    Properties: { AllocationId: !GetAtt NatEip.AllocationId, SubnetId: !Ref PublicSubnetA }
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: WithNat
+    Properties: { RouteTableId: !Ref PrivateRouteTable, DestinationCidrBlock: 0.0.0.0/0, NatGatewayId: !Ref NatGateway }
+
+  # Free gateway endpoints: S3 (data, releases, Amazon Linux package repos) and DynamoDB never touch the NAT.
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds: [!Ref PrivateRouteTable]
+  DynamoDbEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: Standard
+    Properties:
+      GroupDescription: Orbis ALB - HTTP from CloudFront only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, SourcePrefixListId: !Ref CloudFrontPrefixListId }
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Orbis app server - port 8080 from the ALB (standard) or CloudFront (free) only, no SSH
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - !If
+          - Caddy
+          - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+          - !If
+            - Free
+            - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourcePrefixListId: !Ref CloudFrontPrefixListId }
+            - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref AlbSecurityGroup }
+        # Caddy: port 80 for the Let's Encrypt HTTP challenge and the redirect to HTTPS.
+        - !If [Caddy, { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }, !Ref "AWS::NoValue"]
+  # Free mode: a fixed public address, so CloudFront's origin name never changes when the instance is replaced.
+  AppEip:
+    Type: AWS::EC2::EIP
+    Condition: Free
+    Properties: { Domain: vpc, Tags: [{ Key: Name, Value: orbis-app }] }
+
+  # ------------------------------------------------------------------ storage
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      OwnershipControls: { Rules: [{ ObjectOwnership: BucketOwnerEnforced }] }
+      # Every scene save is a new version: an overwritten or deleted scene can be restored for 30 days.
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - { Id: old-versions, Status: Enabled, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
+          - { Id: old-releases, Status: Enabled, Prefix: _releases/archive/, ExpirationInDays: 60 }
+          - { Id: abort-uploads, Status: Enabled, AbortIncompleteMultipartUpload: { DaysAfterInitiation: 2 } }
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt DataBucket.Arn, !Sub "${DataBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: orbis-projects
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: !If [Standard, true, false] }
+      AttributeDefinitions:
+        - { AttributeName: id, AttributeType: S }
+        - { AttributeName: ownerUserId, AttributeType: S }
+        - { AttributeName: updatedAt, AttributeType: S }
+      KeySchema: [{ AttributeName: id, KeyType: HASH }]
+      GlobalSecondaryIndexes:
+        - IndexName: byOwner
+          KeySchema: [{ AttributeName: ownerUserId, KeyType: HASH }, { AttributeName: updatedAt, KeyType: RANGE }]
+          Projection: { ProjectionType: KEYS_ONLY }
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: orbis-users
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: !If [Standard, true, false] }
+      AttributeDefinitions:
+        - { AttributeName: id, AttributeType: S }
+        - { AttributeName: email, AttributeType: S }
+      KeySchema: [{ AttributeName: id, KeyType: HASH }]
+      GlobalSecondaryIndexes:
+        - IndexName: byEmail
+          KeySchema: [{ AttributeName: email, KeyType: HASH }]
+          Projection: { ProjectionType: KEYS_ONLY }
+  ResetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: orbis-resets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: tokenHash, AttributeType: S }]
+      KeySchema: [{ AttributeName: tokenHash, KeyType: HASH }]
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+
+  # ------------------------------------------------------------------ background jobs
+  JobsDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties: { QueueName: orbis-jobs-dlq, MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true }
+  JobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: orbis-jobs
+      VisibilityTimeout: 120
+      SqsManagedSseEnabled: true
+      RedrivePolicy: { deadLetterTargetArn: !GetAtt JobsDeadLetterQueue.Arn, maxReceiveCount: 3 }
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/orbis-worker, RetentionInDays: 14 }
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: orbis-worker
+          PolicyDocument:
+            Statement:
+              - { Effect: Allow, Action: [logs:CreateLogStream, logs:PutLogEvents], Resource: !Sub "${WorkerLogGroup.Arn}:*" }
+              - { Effect: Allow, Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility], Resource: !GetAtt JobsQueue.Arn }
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+                Condition: { StringLike: { s3:prefix: ["projects/*"] } }
+              - { Effect: Allow, Action: s3:DeleteObject, Resource: !Sub "${DataBucket.Arn}/projects/*" }
+  Worker:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: orbis-worker
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 256
+      Timeout: 60
+      Role: !GetAtt WorkerRole.Arn
+      Environment: { Variables: { BUCKET: !Ref DataBucket } }
+      Code:
+        # WORKER-START (scripts/aws/test-local.mjs runs this code against LocalStack)
+        ZipFile: |
+          // Orbis background worker: jobs the API server queues on SQS instead of doing them in the request.
+          //   { type: "delete-project", projectId } -> removes every file under projects/<id>/ (thumbnail, reports)
+          const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = require("@aws-sdk/client-s3");
+          const s3 = new S3Client({ forcePathStyle: !!process.env.AWS_ENDPOINT_URL });
+          const ID = /^[a-zA-Z0-9_-]{1,64}$/;
+
+          async function deletePrefix(Bucket, Prefix) {
+            let removed = 0;
+            let token;
+            do {
+              const page = await s3.send(new ListObjectsV2Command({ Bucket, Prefix, ContinuationToken: token }));
+              const Objects = (page.Contents || []).map((item) => ({ Key: item.Key }));
+              if (Objects.length) await s3.send(new DeleteObjectsCommand({ Bucket, Delete: { Objects, Quiet: true } }));
+              removed += Objects.length;
+              token = page.IsTruncated ? page.NextContinuationToken : undefined;
+            } while (token);
+            return removed;
+          }
+
+          exports.handler = async (event) => {
+            const batchItemFailures = [];
+            for (const record of event.Records || []) {
+              try {
+                const job = JSON.parse(record.body);
+                if (job.type === "delete-project" && ID.test(job.projectId)) {
+                  const removed = await deletePrefix(process.env.BUCKET, "projects/" + job.projectId + "/");
+                  console.log(JSON.stringify({ job: job.type, projectId: job.projectId, removed }));
+                } else {
+                  console.warn("Ignoring unknown job", record.body);
+                }
+              } catch (error) {
+                // Only this message is retried (then dead-lettered after 3 attempts); the rest of the batch completes.
+                console.error("Job failed", record.messageId, error);
+                batchItemFailures.push({ itemIdentifier: record.messageId });
+              }
+            }
+            return { batchItemFailures };
+          };
+        # WORKER-END
+  WorkerQueueMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt JobsQueue.Arn
+      FunctionName: !Ref Worker
+      BatchSize: 10
+      FunctionResponseTypes: [ReportBatchItemFailures]
+
+  # ------------------------------------------------------------------ app server
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /orbis/app, RetentionInDays: 14 }
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement: [{ Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }]
+      # Session Manager shell and deploy commands (no SSH keys, no open port 22).
+      ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"]
+      Policies:
+        - PolicyName: orbis-app
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: [!Sub "${DataBucket.Arn}/projects/*", !Sub "${DataBucket.Arn}/assets/*"]
+              - { Effect: Allow, Action: s3:GetObject, Resource: !Sub "${DataBucket.Arn}/_releases/*" }
+              - { Effect: Allow, Action: s3:ListBucket, Resource: !GetAtt DataBucket.Arn }
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query, dynamodb:Scan]
+                Resource:
+                  - !GetAtt ProjectsTable.Arn
+                  - !Sub "${ProjectsTable.Arn}/index/*"
+                  - !GetAtt UsersTable.Arn
+                  - !Sub "${UsersTable.Arn}/index/*"
+                  - !GetAtt ResetsTable.Arn
+              - { Effect: Allow, Action: sqs:SendMessage, Resource: !GetAtt JobsQueue.Arn }
+              - { Effect: Allow, Action: ssm:GetParametersByPath, Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/orbis" }
+              - { Effect: Allow, Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams], Resource: !Sub "${AppLogGroup.Arn}:*" }
+              # Free mode: the instance attaches the stack's Elastic IP to itself at boot.
+              - { Effect: Allow, Action: ec2:AssociateAddress, Resource: "*" }
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: { Roles: [!Ref InstanceRole] }
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        # t3.micro (x86) is the free-tier instance; standard mode uses Graviton. The bundle is plain JavaScript.
+        ImageId: !If
+          - Free
+          - "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+          - "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}"
+        InstanceType: !If [Free, t3.micro, t4g.small]
+        IamInstanceProfile: { Arn: !GetAtt InstanceProfile.Arn }
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: !If [Free, true, false]
+            Groups: [!Ref AppSecurityGroup]
+        MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+        # 16 GB of the free tier's 30 GB of gp3.
+        BlockDeviceMappings: [{ DeviceName: /dev/xvda, Ebs: { VolumeSize: 16, VolumeType: gp3, Encrypted: true } }]
+        TagSpecifications: [{ ResourceType: instance, Tags: [{ Key: Name, Value: orbis-app }] }]
+        UserData:
+          Fn::Base64: !Sub
+            - |
+              #!/bin/bash
+              set -euxo pipefail
+              if [ -n "${EipAllocation}" ]; then
+                token=$(curl -sX PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+                instance=$(curl -s -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+                aws ec2 associate-address --region ${AWS::Region} --instance-id "$instance" --allocation-id "${EipAllocation}" --allow-reassociation
+              fi
+              # Amazon Linux repos are served from S3, so this works through the S3 endpoint even without a NAT.
+              dnf install -y nodejs22 amazon-cloudwatch-agent
+              useradd --system --home /var/lib/orbis --create-home orbis || true
+              mkdir -p /opt/orbis/releases /var/log/orbis
+              chown orbis /var/log/orbis
+              NODE_BIN=$(command -v node-22 || command -v node)
+
+              cat > /etc/orbis.env <<ENV
+              NODE_ENV=production
+              PORT=8080
+              HOST=${AppHost}
+              RB_STORAGE=aws
+              RB_S3_BUCKET=${DataBucket}
+              RB_DDB_PREFIX=orbis
+              RB_JOBS_QUEUE_URL=${JobsQueue}
+              AWS_REGION=${AWS::Region}
+              RB_PUBLIC_URL=https://${PublicHost}
+              RB_TRUST_PROXY=${TrustProxy}
+              RB_ORIGIN_SECRET=${OriginHeader}
+              RB_DATA_DIR=/var/lib/orbis
+              ENV
+              chmod 600 /etc/orbis.env
+
+              # Pulls the newest bundle and secrets (SSM /orbis/*), then restarts. Also run by deploy.mjs over SSM.
+              cat > /opt/orbis/update.sh <<'UPDATE'
+              #!/bin/bash
+              set -euo pipefail
+              source <(grep -E '^(RB_S3_BUCKET|AWS_REGION)=' /etc/orbis.env | sed 's/^/export /')
+              stamp=$(date +%Y%m%d%H%M%S)
+              dir=/opt/orbis/releases/$stamp
+              mkdir -p "$dir"
+              # On a brand-new stack the bundle is uploaded right after the stack finishes, so wait for it (up to 20 min).
+              for attempt in $(seq 1 80); do
+                aws s3 cp "s3://$RB_S3_BUCKET/${ReleaseKey}" /tmp/orbis.tgz --region "$AWS_REGION" && break
+                [ "$attempt" = 80 ] && exit 1
+                sleep 15
+              done
+              tar -xzf /tmp/orbis.tgz -C "$dir"
+              # Secrets (GEMINI_API_KEY, ORBIS_SESSION_SECRET, GOOGLE_CLIENT_ID) live in SSM Parameter Store, not here.
+              aws ssm get-parameters-by-path --path /orbis --with-decryption --region "$AWS_REGION" \
+                --query 'Parameters[].[Name,Value]' --output text 2>/dev/null \
+                | awk -F'\t' '{ n=$1; sub(/^\/orbis\//, "", n); print n "=" $2 }' > /etc/orbis.secrets.env.tmp || true
+              mv /etc/orbis.secrets.env.tmp /etc/orbis.secrets.env && chmod 600 /etc/orbis.secrets.env
+              ln -sfn "$dir" /opt/orbis/current
+              systemctl restart orbis
+              ls -1dt /opt/orbis/releases/* | tail -n +4 | xargs -r rm -rf
+              UPDATE
+              chmod +x /opt/orbis/update.sh
+
+              cat > /etc/systemd/system/orbis.service <<UNIT
+              [Unit]
+              Description=Orbis web app, API and collaboration server
+              After=network-online.target
+              Wants=network-online.target
+              [Service]
+              User=orbis
+              EnvironmentFile=/etc/orbis.env
+              EnvironmentFile=-/etc/orbis.secrets.env
+              WorkingDirectory=/opt/orbis/current
+              ExecStart=$NODE_BIN /opt/orbis/current/server/dist/index.js
+              Restart=always
+              RestartSec=3
+              TimeoutStopSec=20
+              StandardOutput=append:/var/log/orbis/app.log
+              StandardError=append:/var/log/orbis/app.log
+              [Install]
+              WantedBy=multi-user.target
+              UNIT
+
+              cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<CW
+              { "logs": { "logs_collected": { "files": { "collect_list": [
+                { "file_path": "/var/log/orbis/app.log", "log_group_name": "${AppLogGroup}", "log_stream_name": "{instance_id}" } ] } } } }
+              CW
+              /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+                -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json || true
+
+              # Caddy (no CloudFront): HTTPS + WSS with an automatic Let's Encrypt certificate for <ip>.sslip.io.
+              if [ -n "${CaddyHost}" ]; then
+                arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+                curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_$arch.tar.gz" | tar -xz -C /usr/local/bin caddy
+                useradd --system --home /var/lib/caddy --create-home caddy || true
+                mkdir -p /etc/caddy
+                cat > /etc/caddy/Caddyfile <<CADDY
+              ${CaddyHost} {
+                encode gzip
+                reverse_proxy 127.0.0.1:8080
+              }
+              CADDY
+                cat > /etc/systemd/system/caddy.service <<CUNIT
+              [Unit]
+              Description=Caddy HTTPS proxy for Orbis
+              After=network-online.target
+              Wants=network-online.target
+              [Service]
+              User=caddy
+              Environment=XDG_DATA_HOME=/var/lib/caddy XDG_CONFIG_HOME=/var/lib/caddy
+              ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+              AmbientCapabilities=CAP_NET_BIND_SERVICE
+              Restart=always
+              RestartSec=5
+              [Install]
+              WantedBy=multi-user.target
+              CUNIT
+                systemctl daemon-reload
+                systemctl enable --now caddy
+              fi
+
+              systemctl daemon-reload
+              systemctl enable orbis
+              /opt/orbis/update.sh
+            - EipAllocation: !If [Free, !GetAtt AppEip.AllocationId, ""]
+              TrustProxy: !If [Free, "1", "2"]
+              AppHost: !If [Caddy, 127.0.0.1, 0.0.0.0]
+              CaddyHost: !If [Caddy, !Join ["", [!Join ["-", !Split [".", !Ref AppEip]], ".sslip.io"]], ""]
+              PublicHost: !If [Caddy, !Join ["", [!Join ["-", !Split [".", !Ref AppEip]], ".sslip.io"]], !GetAtt Distribution.DomainName]
+              OriginHeader: !If [Caddy, "", !Ref OriginSecret]
+
+  AppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      # Exactly one instance: it is the authoritative collaboration server and caches sessions in memory.
+      # If it fails its health check, the group replaces it; all state is in S3/DynamoDB.
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier: !If [Free, [!Ref PublicSubnetA, !Ref PublicSubnetB], [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+      LaunchTemplate: { LaunchTemplateId: !Ref LaunchTemplate, Version: !GetAtt LaunchTemplate.LatestVersionNumber }
+      TargetGroupARNs: !If [Standard, [!Ref TargetGroup], !Ref "AWS::NoValue"]
+      HealthCheckType: !If [Standard, ELB, EC2]
+      HealthCheckGracePeriod: 1500
+      Tags: [{ Key: Name, Value: orbis-app, PropagateAtLaunch: false }]
+    DependsOn: [S3Endpoint, DynamoDbEndpoint]
+
+  # ------------------------------------------------------------------ load balancer + CDN
+  LoadBalancer:
+    Condition: Standard
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        - { Key: idle_timeout.timeout_seconds, Value: "120" }
+        - { Key: routing.http.drop_invalid_header_fields.enabled, Value: "true" }
+  TargetGroup:
+    Condition: Standard
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      Protocol: HTTP
+      Port: 8080
+      TargetType: instance
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 4
+      TargetGroupAttributes: [{ Key: deregistration_delay.timeout_seconds, Value: "20" }]
+  Listener:
+    Condition: Standard
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions: [{ Type: fixed-response, FixedResponseConfig: { StatusCode: "403", ContentType: text/plain, MessageBody: Forbidden } }]
+  FromCloudFrontRule:
+    Condition: Standard
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref Listener
+      Priority: 1
+      Conditions: [{ Field: http-header, HttpHeaderConfig: { HttpHeaderName: X-Orbis-Origin, Values: [!Ref OriginSecret] } }]
+      Actions: [{ Type: forward, TargetGroupArn: !Ref TargetGroup }]
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: WithCloudFront
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Orbis
+        HttpVersion: http2and3
+        PriceClass: PriceClass_200
+        Origins:
+          - Id: app
+            # Free: the Elastic IP's public DNS name (CloudFront origins must be names, not IPs) on port 8080.
+            DomainName: !If
+              - Free
+              - !Join
+                - ""
+                - - ec2-
+                  - !Join ["-", !Split [".", !Ref AppEip]]
+                  - !If [UsEast1, ".compute-1.amazonaws.com", !Sub ".${AWS::Region}.compute.amazonaws.com"]
+              - !GetAtt LoadBalancer.DNSName
+            CustomOriginConfig: { OriginProtocolPolicy: http-only, HTTPPort: !If [Free, 8080, 80], OriginReadTimeout: 60, OriginKeepaliveTimeout: 60 }
+            OriginCustomHeaders: [{ HeaderName: X-Orbis-Origin, HeaderValue: !Ref OriginSecret }]
+        # Everything dynamic (API, /ws WebSocket, project pages, auth cookies) passes through uncached.
+        DefaultCacheBehavior:
+          TargetOriginId: app
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          Compress: true
+          CachePolicyId: !FindInMap [CloudFront, Policies, CachingDisabled]
+          OriginRequestPolicyId: !FindInMap [CloudFront, Policies, AllViewerAndCloudFrontHeaders]
+        # Cached at the edge: content-hashed build files, bundled furniture models, and uploaded assets
+        # (random, unguessable names, served with immutable headers). Cache keys carry no cookies, so nothing
+        # user-specific is cached. Project scenes, thumbnails and PDF reports are never cached here.
+        CacheBehaviors:
+          - PathPattern: /assets/*
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: !FindInMap [CloudFront, Policies, CachingOptimized]
+          - PathPattern: /models/*
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: !FindInMap [CloudFront, Policies, CachingOptimized]
+          - PathPattern: /api/assets/*
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: !FindInMap [CloudFront, Policies, CachingOptimized]
+
+Outputs:
+  AppUrl:
+    Description: Public HTTPS address (share links use it)
+    Value: !If
+      - Caddy
+      - !Join ["", ["https://", !Join ["-", !Split [".", !Ref AppEip]], ".sslip.io"]]
+      - !Sub https://${Distribution.DomainName}
+  DataBucketName:
+    Value: !Ref DataBucket
+  AutoScalingGroupName:
+    Value: !Ref AppGroup
+  JobsQueueUrl:
+    Value: !Ref JobsQueue
+  LoadBalancerDns:
+    Condition: Standard
+    Description: Not reachable directly (CloudFront-only); listed for troubleshooting
+    Value: !GetAtt LoadBalancer.DNSName
+  Mode:
+    Value: !Ref Mode
+  NatEnabled:
+    Value: !Ref EnableNat

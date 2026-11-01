@@ -1,6 +1,8 @@
-/** Uploads to the server's asset store (kept in the data dir, so links survive restarts and work for collaborators). */
+import { currentProjectId } from "./project";
+
+/** Uploads to the server's asset store (data dir or S3, so links survive restarts and work for collaborators). */
 export async function postAsset(dataUrl: string, kind: "plan" | "cutout" | "model"): Promise<{ id: string; url: string }> {
-  const response = await fetch("/api/assets", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dataUrl, kind }) });
+  const response = await fetch("/api/assets", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dataUrl, kind, projectId: currentProjectId() ?? undefined }) });
   const payload = (await response.json().catch(() => ({}))) as { id?: string; url?: string; error?: string };
   if (!response.ok || !payload.url) throw new Error(payload.error ?? `Upload failed (${response.status}).`);
   return { id: payload.id!, url: payload.url };

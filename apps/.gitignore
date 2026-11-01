@@ -10,3 +10,5 @@ coverage/
 
 # Scenes saved by the local server
 server/data/
+.release/
+infra/aws/.deploy-state.json

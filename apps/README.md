@@ -42,6 +42,17 @@ It prints `Orbis is live: https://<random>.trycloudflare.com` once the link answ
 
 Check the public link: `npm run smoke:collab -- https://<random>.trycloudflare.com` (it leaves one `smoke-…@example.com` account behind).
 
+### Deploy on AWS (CloudFront → ALB → EC2, S3 + DynamoDB, SQS + Lambda)
+
+```bash
+aws configure                 # once, with your own IAM credentials
+npm run aws:deploy            # free-tier layout in ap-south-1; prints https://<id>.cloudfront.net (--standard: ALB + NAT)
+npm run aws:secret -- GEMINI_API_KEY
+RB_S3_BUCKET=<bucket> AWS_REGION=<region> npm run aws:migrate   # copy server/data into S3 + DynamoDB
+```
+
+Set `RB_STORAGE=aws` and the server keeps scenes, thumbnails, uploads and PDF reports in S3 and project and account records in DynamoDB; the default (`local`) is unchanged. Test the AWS backend without an account: `npm run aws:test-local` (LocalStack). Architecture, tables, costs and troubleshooting: [docs/aws-deployment.md](docs/aws-deployment.md).
+
 ### Deploy on Railway (recommended: always on, WebSockets, persistent volume)
 
 1. Push this repo to GitHub. In Railway: **New Project → Deploy from GitHub repo**.

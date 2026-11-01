@@ -1,17 +1,19 @@
 /**
  * Accounts for Orbis: email + password (scrypt), optional Google sign-in, signed session cookies.
  *
- * Storage is a JSON file in the data directory (the project rule is "no database"; the hosted volume keeps it).
+ * Storage: users.json in the data directory, or DynamoDB on AWS (see storage.ts). The server keeps the users in
+ * memory and is their only writer.
  * Sessions are stateless HMAC-signed cookies, so they survive server restarts. Each user has a `tokenVersion`;
  * bumping it (password reset) invalidates every existing session for that user.
  */
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual, randomUUID, createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import { z } from "zod";
+import type { AccountStore } from "./storage.js";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
 
@@ -43,6 +45,9 @@ const ForgotSchema = z.object({ email: EmailSchema });
 const ResetSchema = z.object({ token: z.string().min(20), password: PasswordSchema });
 const GoogleSchema = z.object({ credential: z.string().min(20) });
 
+/** HTTPS as the visitor sees it. On AWS, CloudFront terminates TLS and reaches the ALB over HTTP, so it says so itself. */
+const isHttps = (request: Request) => request.secure || request.get("cloudfront-forwarded-proto") === "https";
+
 export function publicUser(user: User): PublicUser {
   return { id: user.id, name: user.name, email: user.email, color: user.color, hasPassword: !!user.passwordHash, google: !!user.googleId };
 }
@@ -68,37 +73,26 @@ export class Accounts {
   private secret: Buffer | null = null;
   private attempts = new Map<string, { count: number; until: number }>();
 
-  constructor(private readonly dataRoot: string, private readonly options: { production: boolean; googleClientId: string | null; showResetLinks: boolean }) {}
-
-  private get file() {
-    return resolve(this.dataRoot, "users.json");
-  }
+  constructor(private readonly dataRoot: string, private readonly backend: AccountStore, private readonly options: { production: boolean; googleClientId: string | null; showResetLinks: boolean }) {}
 
   private async load(): Promise<Store> {
     if (this.store) return this.store;
-    try {
-      const parsed = JSON.parse(await readFile(this.file, "utf8")) as Partial<Store>;
-      this.store = { users: (parsed.users ?? []).map((user) => ({ ...user, recent: user.recent ?? [] })), resets: parsed.resets ?? [] };
-    } catch {
-      this.store = { users: [], resets: [] };
-    }
+    this.store = await this.backend.load();
     return this.store;
   }
 
   private save() {
-    // Serialize writes; each one writes the whole (small) file atomically.
-    this.writing = this.writing.then(async () => {
-      await mkdir(this.dataRoot, { recursive: true });
-      await writeFile(this.file + ".tmp", JSON.stringify(this.store, null, 2));
-      await rename(this.file + ".tmp", this.file);
-    }).catch((error) => console.error("Could not save accounts", error));
+    // Serialized; the backend writes only what changed.
+    this.writing = this.writing.then(() => this.backend.save(this.store!)).catch((error) => console.error("Could not save accounts", error));
     return this.writing;
   }
 
   /** Session signing key: ORBIS_SESSION_SECRET, or a random key generated once and kept in the data dir. */
   private async key() {
     if (this.secret) return this.secret;
-    if (process.env.ORBIS_SESSION_SECRET) return (this.secret = Buffer.from(process.env.ORBIS_SESSION_SECRET));
+    // "hex:<key>" is the data dir's session.key moved into the environment (keeps existing sessions valid).
+    const configured = process.env.ORBIS_SESSION_SECRET?.trim();
+    if (configured) return (this.secret = configured.startsWith("hex:") ? Buffer.from(configured.slice(4), "hex") : Buffer.from(configured));
     const path = resolve(this.dataRoot, "session.key");
     try {
       this.secret = Buffer.from(await readFile(path, "utf8"), "hex");
@@ -138,7 +132,7 @@ export class Accounts {
 
   private async startSession(request: Request, response: Response, user: User, remember = true) {
     const maxAge = remember ? LONG_SESSION_S : 60 * 60 * 12;
-    const secure = request.secure ? "; Secure" : "";
+    const secure = isHttps(request) ? "; Secure" : "";
     response.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(await this.sign(user, maxAge))}; Path=/; HttpOnly; SameSite=Lax${secure}${remember ? `; Max-Age=${maxAge}` : ""}`);
   }
 
@@ -223,7 +217,7 @@ export class Accounts {
     });
 
     router.post("/logout", (request, response) => {
-      response.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${request.secure ? "; Secure" : ""}`);
+      response.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${isHttps(request) ? "; Secure" : ""}`);
       response.json({ ok: true });
     });
 

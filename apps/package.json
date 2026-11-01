@@ -26,7 +26,12 @@
     "dev:share": "RB_HOST=0.0.0.0 node scripts/dev.mjs",
     "tunnel": "node scripts/tunnel.mjs",
     "share": "node scripts/share.mjs",
-    "smoke:collab": "node scripts/collab-smoke.mjs"
+    "smoke:collab": "node scripts/collab-smoke.mjs",
+    "aws:release": "node scripts/aws/build-release.mjs",
+    "aws:deploy": "node scripts/aws/deploy.mjs",
+    "aws:secret": "node scripts/aws/secret.mjs",
+    "aws:migrate": "node --import tsx/esm server/scripts/migrate-to-aws.ts",
+    "aws:test-local": "node scripts/aws/test-local.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

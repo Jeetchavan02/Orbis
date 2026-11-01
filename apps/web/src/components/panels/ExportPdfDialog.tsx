@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Download, FileText, Loader2, RotateCcw, Share2, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FileText, Link2, Loader2, RotateCcw, Share2, X } from "lucide-react";
 import { useWorkspaceStore } from "../../store/workspace";
 import { useExportPdf } from "../../lib/ui";
 import { buildDesignPdf, pdfFilename, renderDesignViews, type ExportProgress } from "../../lib/designPdf";
 import { canShareFiles, downloadBlob, openWhatsApp, shareMessage } from "../../lib/share";
-import { currentProjectId, projectUrl } from "../../lib/project";
+import { currentProjectId, projectUrl, shareOrigin } from "../../lib/project";
 import { WhatsAppIcon } from "./WhatsAppIcon";
 
 type State =
@@ -20,6 +20,8 @@ export function ExportPdfDialog() {
   const setOpen = useExportPdf((state) => state.setOpen);
   const [state, setState] = useState<State>({ status: "working", progress: { step: "render", done: 0, total: 1, label: "Preparing" } });
   const [downloaded, setDownloaded] = useState(false);
+  // Link to this PDF stored with the project on the server (S3 on AWS), so it can be sent instead of attached.
+  const [pdfLink, setPdfLink] = useState<{ status: "idle" | "uploading" } | { status: "ready"; url: string }>({ status: "idle" });
   const run = useRef(0);
 
   const link = projectUrl(currentProjectId() ?? "default");
@@ -27,6 +29,7 @@ export function ExportPdfDialog() {
   const generate = async () => {
     const id = ++run.current;
     setDownloaded(false);
+    setPdfLink({ status: "idle" });
     setState({ status: "working", progress: { step: "render", done: 0, total: 1, label: "Preparing the scene" } });
     const { setCapturing } = useExportPdf.getState();
     // Snapshot: the report shows the scene as it was when export started, even if collaborators keep editing.
@@ -76,6 +79,25 @@ export function ExportPdfDialog() {
       if ((error as Error).name !== "AbortError") useWorkspaceStore.getState().notify("error", "Sharing failed. Download the PDF and attach it manually.");
     }
   };
+  const uploadPdf = async (file: File) => {
+    const response = await fetch(`/api/projects/${encodeURIComponent(currentProjectId() ?? "default")}/reports?name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "content-type": "application/pdf" }, body: file });
+    const payload = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
+    if (!response.ok || !payload.url) throw new Error(payload.error ?? `Upload failed (${response.status}).`);
+    return shareOrigin() + payload.url;
+  };
+  const copyPdfLink = async () => {
+    if (state.status !== "done") return;
+    setPdfLink({ status: "uploading" });
+    try {
+      const url = await uploadPdf(state.file);
+      // Clipboard can be refused (plain-HTTP origins); the link is still shown in the field below.
+      await navigator.clipboard?.writeText(url).catch(() => undefined);
+      setPdfLink({ status: "ready", url });
+    } catch (error) {
+      setPdfLink({ status: "idle" });
+      useWorkspaceStore.getState().notify("error", "Couldn't create a PDF link: " + (error as Error).message);
+    }
+  };
   const fileShare = state.status === "done" && canShareFiles(state.file);
   const percent = state.status === "working" ? Math.round(((state.progress.step === "render" ? state.progress.done / state.progress.total * 0.85 : 0.85 + 0.15 * state.progress.done)) * 100) : 100;
 
@@ -113,7 +135,10 @@ export function ExportPdfDialog() {
             <div className="export-actions">
               <button type="button" className="primary-button" onClick={download}>{downloaded ? <><Check size={14} /> Downloaded</> : <><Download size={14} /> Download PDF</>}</button>
               {fileShare ? <button type="button" className="ghost-button" onClick={() => void share()}><Share2 size={14} /> Share PDF…</button> : null}
-              <button type="button" className="whatsapp-button" onClick={() => openWhatsApp(shareMessage(link))}><WhatsAppIcon size={15} /> Share on WhatsApp</button>
+              <button type="button" className="whatsapp-button" onClick={() => openWhatsApp(shareMessage(link) + (pdfLink.status === "ready" ? `\n\nDesign PDF: ${pdfLink.url}` : ""))}><WhatsAppIcon size={15} /> Share on WhatsApp</button>
+              <button type="button" className="ghost-button" disabled={pdfLink.status === "uploading"} onClick={() => void copyPdfLink()} title="Store this PDF with the project and copy a download link">
+                {pdfLink.status === "uploading" ? <><Loader2 size={14} className="spin" /> Uploading…</> : pdfLink.status === "ready" ? <><Check size={14} /> Link copied</> : <><Link2 size={14} /> Copy PDF link</>}
+              </button>
               <button type="button" className="ghost-button" onClick={() => void generate()} title="Render the views again from the current scene"><RotateCcw size={14} /> Regenerate</button>
             </div>
             <p className="field-note export-note">
@@ -121,6 +146,7 @@ export function ExportPdfDialog() {
                 ? "Share PDF opens your device's share sheet, where you can pick WhatsApp, Mail or any other app with the file attached. Share on WhatsApp sends the live project link as a message."
                 : "This browser can't attach files to other apps directly. Download the PDF, then attach it in WhatsApp or your email app. Share on WhatsApp sends the live project link as a message."}
             </p>
+            {pdfLink.status === "ready" ? <input className="export-link" readOnly value={pdfLink.url} aria-label="PDF download link" onFocus={(event) => event.currentTarget.select()} /> : null}
           </>
         ) : null}
       </div>
