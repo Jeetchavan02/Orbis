@@ -5,6 +5,41 @@ export type MeshBounds = {
   max: [number, number, number];
 };
 
+/**
+ * Cylinder (bottom centre at the origin) with separate vertices per side quad and per cap, so the top or
+ * bottom cap, or any side, can be extruded on its own.
+ */
+export function createCylinderMesh({ width, depth, height }: Dimensions3D, segments = 24): MeshData {
+  const rx = width / 2;
+  const rz = depth / 2;
+  const h = height;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const ring = (i: number): [number, number] => {
+    const angle = (i / segments) * Math.PI * 2;
+    return [Math.round(Math.cos(angle) * rx * 1e5) / 1e5, Math.round(Math.sin(angle) * rz * 1e5) / 1e5];
+  };
+  for (let i = 0; i < segments; i += 1) {
+    const [x0, z0] = ring(i);
+    const [x1, z1] = ring(i + 1);
+    const base = positions.length / 3;
+    positions.push(x0, 0, z0, x0, h, z0, x1, h, z1, x1, 0, z1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  for (const [y, up] of [[h, true], [0, false]] as const) {
+    const centre = positions.length / 3;
+    positions.push(0, y, 0);
+    for (let i = 0; i < segments; i += 1) positions.push(...ring(i).flatMap((value, axis) => (axis === 0 ? [value, y] : [value])));
+    for (let i = 0; i < segments; i += 1) {
+      const a = centre + 1 + i;
+      const b = centre + 1 + ((i + 1) % segments);
+      if (up) indices.push(centre, b, a);
+      else indices.push(centre, a, b);
+    }
+  }
+  return { positions, indices, source: "primitive" };
+}
+
 /** Box mesh with 24 vertices (separate per face) so faces can be extruded independently. */
 export function createBoxMesh({ width, depth, height }: Dimensions3D): MeshData {
   const x = width / 2;

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { OrbisMark } from "../brand/Logo";
 import { forgetProject, knownProjects, openProject, ownerKeyFor, rememberProject } from "../../lib/project";
 import {
-  ArrowRight, Bell, ChevronRight, PanelLeft, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
+  ArrowRight, Bell, LogOut, ChevronRight, PanelLeft, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
   Search, Settings, ShieldCheck, Sparkles, Trash2, Upload, Users, X, Zap,
 } from "lucide-react";
 import { catalog, GROUPS, type GroupId } from "../../data/catalog";
 import { useThumbnail } from "../../lib/thumbnails";
-import { loadProfile, saveDefaultProfile } from "../../lib/collab";
+import { saveDefaultProfile } from "../../lib/collab";
+import { authFetch, logout, type Me } from "../../lib/auth";
 import { UploadPlan } from "./UploadPlan";
 import { BlankRoomArt, HeroArt, ROOM_ART } from "./Illustrations";
 
@@ -172,7 +174,7 @@ const FEATURES = [
   { icon: Sparkles, title: "Smart Layouts", text: "Get intelligent suggestions" },
 ];
 
-export function Home() {
+export function Home({ user }: { user: Me }) {
   const [view, setView] = useState<View>("home");
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,7 +182,8 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [bell, setBell] = useState(false);
   const [libraryGroup, setLibraryGroup] = useState<GroupId | "all">("all");
-  const [profile, setProfile] = useState(loadProfile);
+  const [profile, setProfile] = useState({ name: user.name, color: user.color });
+  const [account, setAccount] = useState(false);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("rb.sidebar") === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((value) => { try { localStorage.setItem("rb.sidebar", value ? "0" : "1"); } catch { /* ignore */ } return !value; });
   const load = () => api<{ projects: Project[] }>("/api/projects?ids=" + encodeURIComponent(knownProjects().join(","))).then((data) => setProjects(data.projects)).catch((failure) => setError((failure as Error).message));
@@ -236,8 +239,8 @@ export function Home() {
     <div className="home">
       <aside className={"home-sidebar" + (collapsed ? " home-sidebar--collapsed" : "")}>
         <div className="hs-head">
-          <span className="brand-cube"><Box size={18} /></span>
-          <strong className="hs-title">Reality Builder</strong>
+          <span className="brand-cube"><OrbisMark size={24} /></span>
+          <strong className="hs-title">Orbis</strong>
           <button type="button" className="hs-toggle" onClick={toggleCollapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}><PanelLeft size={18} /></button>
         </div>
         <nav className="hs-group">
@@ -262,8 +265,9 @@ export function Home() {
         <div className="hs-foot">
           <div className="hs-plan">
             <span className="avatar" style={{ background: profile.color }}>{initials(profile.name)}</span>
-            <span className="hs-plan-text"><small>Local workspace</small><strong>{profile.name}</strong></span>
+            <span className="hs-plan-text"><small title={user.email}>{user.email}</small><strong>{profile.name}</strong></span>
             <button type="button" className="icon-button" onClick={() => setView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
+            <button type="button" className="icon-button" onClick={() => void logout()} title="Log out" aria-label="Log out"><LogOut size={17} /></button>
           </div>
         </div>
       </aside>
@@ -292,7 +296,16 @@ export function Home() {
                 </div>
               ) : null}
             </div>
-            <button type="button" className="avatar avatar--lg" style={{ background: profile.color }} onClick={() => setView("settings")} aria-label="Profile settings">{initials(profile.name)}</button>
+            <div className="menu">
+              <button type="button" className="avatar avatar--lg" style={{ background: profile.color }} onClick={() => setAccount(!account)} aria-label="Account menu" aria-expanded={account}>{initials(profile.name)}</button>
+              {account ? (
+                <div className="home-menu home-menu--right account-menu" role="menu">
+                  <div className="account-head"><strong>{profile.name}</strong><small>{user.email}</small></div>
+                  <button type="button" role="menuitem" onClick={() => { setAccount(false); setView("settings"); }}><Settings size={14} /> Profile settings</button>
+                  <button type="button" role="menuitem" className="danger" onClick={() => void logout()}><LogOut size={14} /> Log out</button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
 
@@ -393,7 +406,7 @@ export function Home() {
             <div className="info-card info-card--form">
               <label className="form-row"><span>Display name (shown to collaborators)</span><input value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} /></label>
               <div className="form-row"><span>Colour</span><div className="share-colors">{["#6a3de8", "#d9603b", "#3b82d9", "#2f9e6e", "#c2417a", "#c79a1e"].map((swatch) => <button key={swatch} type="button" aria-label={swatch} className={"share-color" + (profile.color === swatch ? " share-color--active" : "")} style={{ background: swatch }} onClick={() => setProfile({ ...profile, color: swatch })} />)}</div></div>
-              <div className="modal-actions"><button type="button" className="primary-button" disabled={!profile.name.trim()} onClick={() => { saveDefaultProfile(profile.name.trim(), profile.color); setView("home"); }}>Save</button></div>
+              <div className="modal-actions"><button type="button" className="primary-button" disabled={!profile.name.trim()} onClick={() => { saveDefaultProfile(profile.name.trim(), profile.color); void authFetch("profile", { name: profile.name.trim(), color: profile.color }).catch(() => undefined); setView("home"); }}>Save</button></div>
             </div>
           </div>
         ) : null}

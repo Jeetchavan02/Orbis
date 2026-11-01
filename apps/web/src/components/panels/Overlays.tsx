@@ -161,7 +161,7 @@ export function ShareDialog() {
           <span>
             <strong>{loopback ? "Only this computer can open this link" : "Anyone with the link can edit"}</strong>
             <span>{loopback
-              ? "You're running Reality Builder locally. Use the deployed site to share over the internet."
+              ? "You're running Orbis locally. Use the deployed site to share over the internet."
               : "No sign-up needed. Everyone who opens it joins this live scene, and conflicting edits are never silently overwritten."}</span>
           </span>
         </div>

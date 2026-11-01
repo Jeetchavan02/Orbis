@@ -1,5 +1,6 @@
-# Reality Builder
+# Orbis
 
+Formerly Reality Builder. 
 Collaborative, browser-based 3D room design with a computational spatial-intelligence engine.
 GDG On Campus FR.CRCE — Bit N Build, problem statement 3.
 
@@ -43,13 +44,21 @@ Render and Fly.io also work (same build/start commands, `PORT` is read automatic
 | `RB_PUBLIC` | `1` in production | Public mode: private project list, 404 for unknown links, owner-only delete |
 | `HOST` | `0.0.0.0` in production | Bind address |
 | `GEMINI_API_KEY` | none | Enables the AI features (server-side only) |
+| `ORBIS_SESSION_SECRET` | auto | Signs login cookies. If unset, a random key is created once in `RB_DATA_DIR` (fine on a volume) |
+| `GOOGLE_CLIENT_ID` | none | Shows "Continue with Google" on the login page (OAuth web client id; add your domain as an authorised origin) |
+| `ORBIS_SHOW_RESET_LINKS` | `0` in production | No email service is wired up: reset links are printed in the server log. Set to `1` for a demo so the link also appears on the page |
 
 Run the production build locally: `npm run build && npm start` → http://127.0.0.1:3001.
 
+## Accounts
+
+Sign up with name, email and password (scrypt-hashed, stored in `RB_DATA_DIR/users.json`; signed httpOnly session cookie, 30 days with "Keep me signed in"). The dashboard needs an account; shared `/project/<id>` links still work for guests, who just pick a display name. Projects you create, and projects you open from a link while signed in, appear on your dashboard; only the creator can delete.
+
 ## Features
 
-* **Editor:** Planner 5D-style direct dragging (snap, magnetic walls, live collision ring), rotation ring, floating actions; multi-floor scenes with a floor switcher; library with search, click-to-place or drag-and-drop; select, move / rotate / resize gizmos (W/E/R, snapping), duplicate, delete, right-click menu, inspector for transform, size, colour, constraints and lights; room size, surfaces, doors and windows.
-* **Mesh editing:** convert any object to an editable mesh, move vertices (V) and extrude faces (G); import GLB/GLTF as a real collidable, editable mesh. Bounds, colliders and validation update on every edit.
+* **Editor:** Planner 5D-style direct dragging (snap, magnetic walls, live collision ring), rotation ring, floating actions; multi-floor scenes with a floor switcher; library with search, click-to-place or drag-and-drop; select, move / rotate / resize gizmos (W/O/R, snapping), duplicate, delete, right-click menu, inspector for transform, size, colour, constraints and lights; room size, surfaces, doors and windows.
+* **Mesh editing:** convert any object to an editable mesh, move vertices (V, Shift/⌘-click for several, Select all) and extrude faces (G); import GLB/GLTF as a real collidable, editable mesh. `.glb` imports keep their materials and textures.
+* **Floor-plan underlay:** select the room → *Floor-plan underlay* → upload a plan image, then set opacity, width, position and rotation (or *Fit to room*). Saved, undoable and shared. Plans used with *Upload a plan* are attached as a hidden underlay. Bounds, colliders and validation update on every edit.
 * **Spatial validation:** collisions (RBush + SAT), room boundaries, front clearances, door swings and blocked walking paths (grid flood fill, A* routes). Every issue has a rule id, severity, objects, explanation, measurement vs. threshold, and viewport highlight.
 * **Layout recovery:** searched candidates, each fully revalidated; preview as ghosts; apply as one undoable action.
 * **Collaboration:** open-link sharing (`/project/<id>`, no sign-up, name prompt on first visit), authoritative WebSocket server, per-object versions, stale-edit rejection with a Keep mine / Take theirs dialog, version-checked whole-scene replacement (imports and offline merges can't overwrite newer work), presence with live selections and join/leave notices, heartbeat, automatic reconnection with backoff, explicit reconciliation of offline edits.
@@ -69,6 +78,6 @@ Run the production build locally: `npm run build && npm start` → http://127.0.
 6. Toggle **Day / Evening / Night**; select the floor lamp and switch it off or change its temperature.
 7. Menu ▾ → **Load 500-object stress test**; the performance overlay (P) shows FPS, validation time and pair counts. Menu ▾ → **Reset to demo bedroom** to return.
 
-Shortcuts: Q/W/E/R tools · V/G mesh modes · ⌘Z / ⇧⌘Z · ⌘D duplicate · Del delete · F frame · H reset view · [ ] rotate 15° · P perf · ⌘S save · Esc exit/deselect.
+Shortcuts (press ? in the editor for the full list): A select · W move · O rotate · R scale · S square · C circle · L line/measure · T text label · E extrude (⇧E push in) · V/G vertices/faces · 1–7 views · ⌘Z / ⇧⌘Z · ⌘D duplicate · Del delete · F frame · H reset view · [ ] rotate 15° · P perf · ⌘S save · Esc exit/deselect.
 
 More detail: [docs/architecture.md](docs/architecture.md).

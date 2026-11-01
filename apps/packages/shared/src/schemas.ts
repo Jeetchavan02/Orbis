@@ -139,6 +139,37 @@ export const EnvironmentSchema = z.object({
   northOffsetDegrees: z.number().finite().default(0),
 });
 
+/**
+ * A reference image (usually a floor plan) laid flat on a room's floor, for tracing walls and furniture.
+ * Position is the image centre in world metres; width is the image's real-world width (height follows its aspect).
+ */
+export const UnderlaySchema = z.object({
+  url: z.string().min(1).max(300),
+  name: z.string().max(120).default("Floor plan"),
+  roomId: z.string().optional(),
+  x: z.number().finite().default(0),
+  z: z.number().finite().default(0),
+  width: z.number().positive().max(200),
+  aspect: z.number().positive().max(20),
+  rotationDegrees: z.number().finite().default(0),
+  opacity: z.number().min(0).max(1).default(0.6),
+  visible: z.boolean().default(true),
+});
+
+/** A floor annotation: a measuring line (two points, shows its length) or a text label. World metres on the XZ plane. */
+export const AnnotationSchema = z.object({
+  id: z.string().min(1).max(64),
+  kind: z.enum(["line", "text"]),
+  roomId: z.string().optional(),
+  x: z.number().finite(),
+  z: z.number().finite(),
+  /** Line end point (lines only). */
+  x2: z.number().finite().optional(),
+  z2: z.number().finite().optional(),
+  text: z.string().max(120).optional(),
+  color: HexColorSchema.default("#6a3de8"),
+});
+
 export const SceneSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().min(1),
@@ -150,7 +181,11 @@ export const SceneSchema = z.object({
   environment: EnvironmentSchema.default({}),
   /** Room type chosen at project creation (bedroom, living, …); drives library suggestions. */
   roomType: z.string().optional(),
-  /** Version of scene-level settings (name, rules, environment). */
+  /** Floor-plan reference image under the room (scene setting: undoable, saved and shared). */
+  underlay: UnderlaySchema.nullable().default(null),
+  /** Measuring lines and text labels drawn on the floor. */
+  annotations: z.array(AnnotationSchema).max(500).default([]),
+  /** Version of scene-level settings (name, rules, environment, underlay). */
   settingsVersion: z.number().int().nonnegative().default(1),
 });
 
@@ -214,6 +249,10 @@ const SceneSettingsUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   rules: RuleSettingsSchema.partial().optional(),
   environment: EnvironmentSchema.partial().optional(),
+  /** Replaces the whole underlay (null removes it). */
+  underlay: UnderlaySchema.nullable().optional(),
+  /** Replaces the whole annotation list (small; keeps inverses exact). */
+  annotations: z.array(AnnotationSchema).max(500).optional(),
 });
 
 export const BaseSceneActionSchema = z.discriminatedUnion("type", [
@@ -261,6 +300,8 @@ export type RuleSettings = z.infer<typeof RuleSettingsSchema>;
 export type EnvironmentMode = z.infer<typeof EnvironmentModeSchema>;
 export type Environment = z.infer<typeof EnvironmentSchema>;
 export type Scene = z.infer<typeof SceneSchema>;
+export type Underlay = z.infer<typeof UnderlaySchema>;
+export type Annotation = z.infer<typeof AnnotationSchema>;
 export type IssueSeverity = z.infer<typeof IssueSeveritySchema>;
 export type SpatialRuleId = z.infer<typeof SpatialRuleIdSchema>;
 export type FloorPolygon = z.infer<typeof FloorPolygonSchema>;

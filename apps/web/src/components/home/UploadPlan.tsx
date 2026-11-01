@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadDataUrl } from "../../lib/assets";
 import { openProject } from "../../lib/project";
 import { ArrowLeft, Check, CircleAlert, DoorOpen, FileImage, ImageUp, Loader2, RefreshCw, Sofa, Trash2, Upload, X } from "lucide-react";
 import {
@@ -167,7 +168,14 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
     if (!built) return;
     setOpening(true);
     try {
-      const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: built.scene.name, roomType: "bedroom", scene: built.scene }) });
+      // Keep the uploaded plan with the project as a (hidden) underlay to line up and trace against.
+      let scene: Scene = built.scene;
+      if (file) {
+        const room = scene.rooms[0];
+        const plan = await uploadDataUrl(file.preview, "plan").catch(() => null);
+        if (plan && room) scene = { ...scene, underlay: { url: plan.url, name: file.name.replace(/\.[^.]+$/, ""), roomId: room.id, x: room.position.x, z: room.position.z, width: room.dimensions.width + 2 * room.dimensions.wallThickness, aspect: plan.aspect, rotationDegrees: 0, opacity: 0.6, visible: false } };
+      }
+      const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: built.scene.name, roomType: "bedroom", scene }) });
       const body = (await response.json()) as { id?: string; ownerKey?: string; error?: string };
       if (!response.ok || !body.id) throw new Error(body.error ?? "Could not create the project.");
       openProject(body.id, body.ownerKey);
@@ -258,7 +266,7 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
               </div>
             </div>
             {error ? <p className="issue-inline issue-inline--error up-error"><CircleAlert size={14} /> {error}</p> : null}
-            <button type="button" className="primary-button primary-button--lg up-cta" disabled={!built || building || opening} onClick={() => void openInEditor()}>{opening ? <Loader2 size={16} className="spin" /> : <Check size={16} />} Edit in Reality Builder</button>
+            <button type="button" className="primary-button primary-button--lg up-cta" disabled={!built || building || opening} onClick={() => void openInEditor()}>{opening ? <Loader2 size={16} className="spin" /> : <Check size={16} />} Edit in Orbis</button>
             <button type="button" className="link-button up-another" onClick={remove}>Use a different image</button>
           </aside>
         </div>
@@ -312,15 +320,19 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
           <aside className="up-tips">
             <h2>How to get the best result</h2>
             <p>Upload one room, straight-on and uncropped, with walls, doors and windows visible. Sizes written on the plan are used as the real measurements.</p>
-            <div className="up-example">
-              <span className="up-badge up-badge--ok"><Check size={16} /></span>
-              <div className="up-card"><PlanSketch /></div>
-              <div className="up-card up-card--tilt"><PlanSketch /></div>
-            </div>
-            <div className="up-example">
-              <span className="up-badge up-badge--bad"><X size={16} /></span>
-              <div className="up-card up-card--blur"><PlanSketch /></div>
-              <div className="up-card up-card--dark"><PlanSketch /></div>
+            <div className="up-examples">
+              <figure className="up-ex up-ex--ok">
+                <div className="up-card"><PlanSketch /><span className="up-badge up-badge--ok"><Check size={14} /></span></div>
+                <figcaption>Clear, straight-on, sizes readable</figcaption>
+              </figure>
+              <figure className="up-ex">
+                <div className="up-card up-card--blur"><PlanSketch /><span className="up-badge up-badge--bad"><X size={14} /></span></div>
+                <figcaption>Blurry or out of focus</figcaption>
+              </figure>
+              <figure className="up-ex">
+                <div className="up-card up-card--dark"><PlanSketch /><span className="up-badge up-badge--bad"><X size={14} /></span></div>
+                <figcaption>Dark, shadowed or at an angle</figcaption>
+              </figure>
             </div>
             <ul className="up-list">
               <li><FileImage size={15} /> One room per upload; for a full house plan you pick the room</li>

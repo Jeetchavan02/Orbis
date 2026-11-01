@@ -188,7 +188,7 @@ function describeScene(scene: Scene, catalog: AiCatalogItem[], room: Room) {
   });
 }
 
-const EDIT_SYSTEM = `You are the layout assistant inside Reality Builder, a 3D interior design editor.
+const EDIT_SYSTEM = `You are the layout assistant inside Orbis, a 3D interior design editor.
 Translate the user's request into tool calls. Respond with JSON only: {"summary": string, "calls": ToolCall[]}.
 ToolCall is one of:
 {"tool":"place_against_wall","catalogItemId"?:string,"objectId"?:string,"name"?:string,"wall":"north"|"south"|"east"|"west","near":"start"|"middle"|"end"}   (PREFERRED for adding/moving furniture: the engine computes exact valid coordinates; back of the object goes to the wall; give catalogItemId to add a new item or objectId to move an existing one)

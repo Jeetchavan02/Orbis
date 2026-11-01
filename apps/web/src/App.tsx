@@ -28,6 +28,9 @@ import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
 import { ConflictDialog, JoinPrompt, MissingProject, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
+import { LabelInput } from "./components/viewport/Annotations";
+import { ShortcutHelp, ToolBanner, useShortcutHelp } from "./components/panels/Shortcuts";
+import { addShape, extrudeShortcut, startAnnotating, useAnnotate } from "./lib/tools";
 import { SettingsDialog } from "./components/panels/SettingsDialog";
 import { AskAiPanel } from "./components/ai/AskAi";
 import { TopBar } from "./components/panels/TopBar";
@@ -105,6 +108,8 @@ export default function App() {
         deleteSelected();
       } else if (key === "escape") {
         useContextMenu.getState().close();
+        useShortcutHelp.getState().close();
+        if (useAnnotate.getState().mode) return;
         if (state.tool === "vertex" || state.tool === "face") state.setTool("translate");
         else state.selectEntity("");
       } else if (!mod && key === "f") {
@@ -112,6 +117,16 @@ export default function App() {
         else state.requestCameraReset();
       } else if (!mod && key === "h") {
         state.requestCameraReset();
+      } else if (!mod && key === "?" ) {
+        useShortcutHelp.getState().toggle();
+      } else if (!mod && state.viewMode !== "walk" && (key === "l" || key === "t")) {
+        startAnnotating(key === "l" ? "line" : "text");
+      } else if (!mod && state.viewMode !== "walk" && (key === "s" || key === "c")) {
+        addShape(key === "s" ? "square" : "circle");
+      } else if (!mod && state.viewMode !== "walk" && key === "e") {
+        extrudeShortcut(event.shiftKey);
+      } else if (!mod && state.viewMode !== "walk" && key === "q") {
+        state.setTool("select");
       } else if (!mod && /^[1-7]$/.test(key)) {
         state.setViewMode(CAMERAS[Number(key) - 1]!.id);
       } else if (!mod && key === "p") {
@@ -257,6 +272,9 @@ export default function App() {
       </div>
       <ConflictDialog />
       <ShareDialog />
+      <LabelInput />
+      <ShortcutHelp />
+      <ToolBanner />
       <JoinPrompt />
       <MissingProject />
       <PhotoTo3DDialog />

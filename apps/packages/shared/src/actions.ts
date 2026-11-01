@@ -188,6 +188,8 @@ function patchSettings(scene: Scene, patch: SceneSettingsPatch) {
     inverse.environment = pick(scene.environment, patch.environment);
     next.environment = { ...scene.environment, ...patch.environment };
   }
+  if (patch.underlay !== undefined) [inverse.underlay, next.underlay] = [scene.underlay ?? null, patch.underlay];
+  if (patch.annotations !== undefined) [inverse.annotations, next.annotations] = [scene.annotations ?? [], patch.annotations];
   return { next, inverse };
 }
 

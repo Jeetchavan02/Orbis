@@ -1,4 +1,4 @@
-# Reality Builder — Claude context
+# Orbis (formerly Reality Builder) — Claude context
 
 Hackathon: GDG On Campus FR.CRCE, Bit N Build. Problem statement #3: "Reality Builder: Collaborative 3D Design & Spatial Intelligence".
 
@@ -81,7 +81,7 @@ Verified in the browser (two tabs) and by `npm test` (35 tests), `npm run typech
   - Key: `GEMINI_API_KEY` in `apps/.env` (loaded by the server only). Model chain: `GEMINI_MODEL` → gemini-flash-latest → gemini-3.5-flash → gemini-flash-lite-latest, with 5-min cooldown for overloaded/retired models. Never use `VITE_`-prefixed keys (they can reach the browser bundle).
 
 ### Latest additions (2026-11-01)
-- **Direct manipulation (Planner 5D-style):** press-and-drag furniture on the floor (5 cm snap, Alt = free, magnetic walls, live red/green collision ring), rotation ring with 15° snaps, floating action bar (duplicate, rotate, elevation drag, frame, lock, delete), arrow-key nudge. Axis gizmos remain as W/E/R. Code: `web/src/components/viewport/Interaction.tsx`.
+- **Direct manipulation (Planner 5D-style):** press-and-drag furniture on the floor (5 cm snap, Alt = free, magnetic walls, live red/green collision ring), rotation ring with 15° snaps, floating action bar (duplicate, rotate, elevation drag, frame, lock, delete), arrow-key nudge. Axis gizmos: W move, O rotate, R scale. Code: `web/src/components/viewport/Interaction.tsx`.
 - **Multi-floor:** rooms at different `position.y` are storeys; engine heights are floor-relative (`isWalkingObstacle(item, floorY)`), clearance/door checks are room-scoped. UI: floor switcher, floors above the active one hidden, placement/score/sun/Vastu/AI follow `activeRoomId`.
 - **Demo apartment:** `fixtures/apartment-scene.json` (3 floors, 41 objects, 0 issues), regenerate with `npx tsx server/scripts/generate-apartment.mts`.
 - **Realistic models:** 13 CC0 Poly Haven glTFs in `web/public/models/` (see LICENSE.md), mapped in `web/src/data/model-manifest.json`, fitted to each object's bounding box (`RealisticModel.tsx`); procedural fallback while loading and for unmatched items.
@@ -107,6 +107,18 @@ Verified in the browser (two tabs) and by `npm test` (35 tests), `npm run typech
 - `load-scene` now carries `baseSeq`; the server answers `load-rejected` if the scene moved on, and `supersede()` bumps every entity version past the old scene's so in-flight edits are rejected as stale.
 - WebSocket heartbeat (25 s ping, terminate dead sockets), reconnect with jittered backoff and immediately on the browser `online` event, join/leave notices.
 - Verified: `npm test` (58), `npm run smoke:collab` against the production build, and a two-browser-profile Playwright run of the 20-step acceptance flow. Not yet verified on a real deployment or two physical networks.
+
+## Orbis sprint (2026-11-01)
+- Brand: `web/src/components/brand/Logo.tsx` (`OrbisMark`, SVG redrawn from the provided logo, currentColor), `web/public/favicon.svg`, original PNG at `web/public/orbis-logo.png`. Internal package names (`@reality-builder/*`) and the health `service` id are unchanged on purpose.
+- Auth: `server/src/auth.ts` (`Accounts`): scrypt hashes, HMAC-signed stateless cookie `orbis_session` with per-user `tokenVersion`, JSON store `RB_DATA_DIR/users.json`, login rate limit, forgot/reset with hashed one-time tokens (link logged; shown on page when `ORBIS_SHOW_RESET_LINKS=1` or in dev), optional Google via `GOOGLE_CLIENT_ID` + tokeninfo. Web: `web/src/lib/auth.ts`, `components/auth/AuthScreen.tsx`, routes `/login /signup /forgot-password /reset-password` in `main.tsx`. Dashboard requires login; `/project/<id>` stays open to guests; signed-in users join under their account name. Project → user map in `RB_DATA_DIR/project-owners.json`; users' `recent` lists projects they opened.
+- Underlay: `scene.underlay` (shared `UnderlaySchema`), changed only via `scene.update` (whole-object replace, exact inverse). Viewport `viewport/Underlay.tsx`; inspector `UnderlaySection` in `RoomInspector`. Assets: `POST /api/assets` accepts png/jpg/webp/glb data URLs.
+- GLB textures: `.glb` stored as an asset; `catalogItemId = "glb:<file>|<meshSignature>"`; `viewport/ImportedModel.tsx` renders the original model fitted to the bbox while the mesh is unedited, else the editable mesh.
+- Multi-vertex: `MeshSelection.vertices`; Shift/⌘-click toggles; gizmo at centroid.
+- Verified: `npm test` (69), smoke script (18 checks incl. signup/session/ownership), browser runs of the 20-step two-profile flow with accounts, GLB import + underlay upload/edit/undo. AI features not re-verified (no Gemini key in the test environment).
+
+## Shortcuts & annotations (2026-11-01)
+- Keys in `App.tsx` keydown: A/Q select, W move, O rotate, R scale, V/G mesh modes, S box, C cylinder (`lib/tools.ts addShape`, editable meshes; `createCylinderMesh` in shared), E extrude (`extrudeShortcut`: converts to mesh → face mode → extrude 0.1 m, ⇧ inward), L line, T text, ? cheat-sheet (`panels/Shortcuts.tsx`). New keys are off in walk mode (WASD/E/Q fly).
+- `scene.annotations` (lines with length, text labels), whole-array replace via `scene.update`; rendering + capture-phase click controller in `viewport/Annotations.tsx`, label input outside the canvas.
 
 ## Decisions log
 

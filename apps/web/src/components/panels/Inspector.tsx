@@ -1,14 +1,16 @@
-import { useRef, useState } from "react";
-import { Box, Copy, DoorOpen, Lightbulb, Lock, Plus, RectangleHorizontal, Spline, Trash2, Unlock, Waypoints } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Box, Copy, DoorOpen, ImageUp, Lightbulb, Loader2, Lock, Plus, RectangleHorizontal, Spline, Trash2, Unlock, Waypoints } from "lucide-react";
 import {
   createBoxMesh,
   extrudeFace,
+  uniqueVertexIndices,
   type FurnitureObject,
   type FurniturePatch,
   type LightFixture,
   type Opening,
   type Room,
   type RoomPatch,
+  type Underlay,
   type WallSide,
 } from "@reality-builder/shared";
 import { requiredFrontClearance } from "@reality-builder/spatial-engine";
@@ -20,6 +22,7 @@ import { InsightsPanel } from "./InsightsPanel";
 import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { commitMesh } from "../viewport/MeshEditor";
 import { ColorField, NumberField, Section, Toggle } from "./fields";
+import { uploadImage } from "../../lib/assets";
 
 /** Details of a library item the user just picked (before it is placed). */
 function CatalogDetails({ entry }: { entry: CatalogItem }) {
@@ -230,7 +233,13 @@ function ObjectInspector({ item }: { item: FurnitureObject }) {
               <button type="button" className={tool !== "vertex" && tool !== "face" ? "active" : ""} onClick={() => setTool("translate")}>Object</button>
             </div>
             {tool === "vertex" ? (
-              <p className="field-note">{meshSelection.vertex === null ? "Click a white vertex, then drag the gizmo arrows." : "Drag the gizmo to move the vertex. Bounds and collisions update on release."}</p>
+              <>
+                <p className="field-note">{meshSelection.vertices.length === 0 ? "Click a vertex to select it. Shift or ⌘-click to select several, then drag the gizmo." : `${meshSelection.vertices.length} vertex${meshSelection.vertices.length === 1 ? "" : "es"} selected. Drag the gizmo to move ${meshSelection.vertices.length === 1 ? "it" : "them together"}; bounds and collisions update on release.`}</p>
+                <div className="underlay-actions">
+                  <button type="button" className="tiny-button" disabled={!item.mesh} onClick={() => { if (item.mesh) { const all = uniqueVertexIndices(item.mesh); useWorkspaceStore.getState().setMeshSelection({ vertices: all, vertex: all[all.length - 1] ?? null, face: null }); } }}>Select all</button>
+                  <button type="button" className="tiny-button" disabled={meshSelection.vertices.length === 0} onClick={() => useWorkspaceStore.getState().setMeshSelection({ vertices: [], vertex: null })}>Clear selection</button>
+                </div>
+              </>
             ) : null}
             {tool === "face" ? (
               meshSelection.face ? (
@@ -306,6 +315,77 @@ function LightSection({ light, onChange }: { light: LightFixture; onChange: (lig
 
 const WALLS: WallSide[] = ["north", "east", "south", "west"];
 
+/** One history entry per drag: the slider previews locally and commits on release. */
+function OpacitySlider({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(Math.round(value * 100));
+  useEffect(() => setDraft(Math.round(value * 100)), [value]);
+  const commit = () => draft !== Math.round(value * 100) && onCommit(draft / 100);
+  return (
+    <label className="underlay-slider">
+      <span>Opacity</span>
+      <input type="range" min={10} max={100} step={5} value={draft} onChange={(event) => setDraft(Number(event.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} />
+      <output>{draft}%</output>
+    </label>
+  );
+}
+
+/** Floor-plan underlay: upload a plan image, then scale, move, rotate and fade it to trace the room. */
+function UnderlaySection({ room }: { room: Room }) {
+  const underlay = useWorkspaceStore((state) => state.scene.underlay);
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const { dispatch, notify } = useWorkspaceStore.getState();
+  const set = (next: Underlay | null, label?: string) => dispatch({ type: "scene.update", patch: { underlay: next } }, label ? { label } : undefined);
+  const change = (patch: Partial<Underlay>) => underlay && set({ ...underlay, ...patch });
+  const roomWidth = room.dimensions.width + 2 * room.dimensions.wallThickness;
+
+  const pick = async (file: File) => {
+    setBusy(true);
+    try {
+      const image = await uploadImage(file, "plan");
+      set({ url: image.url, name: image.name, roomId: room.id, x: room.position.x, z: room.position.z, width: roomWidth, aspect: image.aspect, rotationDegrees: room.yawDegrees, opacity: 0.6, visible: true }, "Add floor-plan underlay");
+      notify("success", "Plan added under the room. Switch to the top view to trace it.");
+    } catch (error) {
+      notify("error", (error as Error).message);
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = "";
+    }
+  };
+
+  return (
+    <Section title="Floor-plan underlay" collapsible defaultOpen={!!underlay} aside={underlay ? <span className="section-hint">{underlay.visible ? "shown" : "hidden"}</span> : null}>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void pick(file); }} />
+      {!underlay ? (
+        <button type="button" className="underlay-drop" disabled={busy} onClick={() => input.current?.click()}>
+          {busy ? <Loader2 size={18} className="spin" /> : <ImageUp size={18} />}
+          <span><strong>{busy ? "Uploading…" : "Upload a floor plan"}</strong><small>PNG, JPG or WebP. It lies under the room so you can trace walls and furniture.</small></span>
+        </button>
+      ) : (
+        <>
+          <div className="underlay-head">
+            <img src={underlay.url} alt="" />
+            <span><strong title={underlay.name}>{underlay.name}</strong><small>{underlay.width.toFixed(2)} × {(underlay.width * underlay.aspect).toFixed(2)} m</small></span>
+          </div>
+          <Toggle label="Show underlay" checked={underlay.visible} onChange={(visible) => change({ visible })} />
+          <OpacitySlider value={underlay.opacity} onCommit={(opacity) => change({ opacity })} />
+          <div className="field-grid">
+            <NumberField label="Width" value={underlay.width} min={0.5} max={200} onCommit={(width) => change({ width })} />
+            <NumberField label="Rotate" value={underlay.rotationDegrees} min={-360} max={360} step={1} suffix="°" onCommit={(rotationDegrees) => change({ rotationDegrees })} />
+            <NumberField label="X" value={underlay.x} min={-100} max={100} onCommit={(x) => change({ x })} />
+            <NumberField label="Z" value={underlay.z} min={-100} max={100} onCommit={(z) => change({ z })} />
+          </div>
+          <div className="underlay-actions">
+            <button type="button" className="tiny-button" onClick={() => change({ width: roomWidth, x: room.position.x, z: room.position.z, rotationDegrees: room.yawDegrees })} title="Centre on this room and match its outer width">Fit to room</button>
+            <button type="button" className="tiny-button" onClick={() => input.current?.click()} disabled={busy}>Replace</button>
+            <button type="button" className="tiny-button tiny-button--danger" onClick={() => set(null, "Remove floor-plan underlay")}><Trash2 size={12} /> Remove</button>
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
 function RoomInspector({ room }: { room: Room }) {
   const { dispatch } = useWorkspaceStore.getState();
   const base = useRef<Record<string, number> | undefined>(undefined);
@@ -341,6 +421,7 @@ function RoomInspector({ room }: { room: Room }) {
         <ColorField label="Floor" value={room.floorColor} onChange={(floorColor) => patchRoom({ floorColor })} />
         <ColorField label="Walls" value={room.wallColor} onChange={(wallColor) => patchRoom({ wallColor })} />
       </Section>
+      <UnderlaySection room={room} />
       <Section title="Doors & windows" aside={
         <span className="inline-actions">
           <button type="button" className="tiny-button" onClick={() => setOpenings([...room.openings, { id: newEntityId("door"), kind: "door", wall: "south", offset: 0, width: 0.85, height: 2.05, sillHeight: 0, hinge: "left", swing: "in" }])}><DoorOpen size={13} /> Door</button>

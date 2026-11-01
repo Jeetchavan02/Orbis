@@ -43,7 +43,8 @@ export type OfflineConflict = { localScene: Scene; serverScene: Scene; edits: nu
 
 export type Notice = { id: number; tone: "info" | "error" | "success"; text: string };
 
-export type MeshSelection = { vertex: number | null; face: number[] | null };
+/** `vertex` is the last-clicked vertex; `vertices` is the whole selection (Shift/⌘-click adds). */
+export type MeshSelection = { vertex: number | null; vertices: number[]; face: number[] | null };
 
 type WorkspaceStore = {
   scene: Scene;
@@ -502,7 +503,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     showRoutes: false,
     showPerf: false,
     recovery: { status: "idle", result: null, previewId: null },
-    mesh: { vertex: null, face: null },
+    mesh: { vertex: null, vertices: [], face: null },
     notices: [],
 
     dispatch: (action, options = {}) => {
@@ -607,11 +608,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         requestValidation();
         set((state) => ({ resetCameraSignal: state.resetCameraSignal + 1 }));
       }
-      set({ selectedEntityId, mesh: { vertex: null, face: null } });
+      set({ selectedEntityId, mesh: { vertex: null, vertices: [], face: null } });
       if (get().tool === "vertex" || get().tool === "face") set({ tool: "translate" });
       client.send({ type: "presence", selectedId: selectedEntityId || null });
     },
-    setTool: (tool) => set({ tool, mesh: { vertex: null, face: null } }),
+    setTool: (tool) => set({ tool, mesh: { vertex: null, vertices: [], face: null } }),
     rename: (name, color) => {
       identity.name = name;
       identity.color = color;

@@ -10,8 +10,11 @@ const check = (ok, label) => {
   if (!ok) failures += 1;
 };
 
+let cookie = "";
 async function api(path, init = {}) {
-  const response = await fetch(base + path, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } });
+  const response = await fetch(base + path, { ...init, headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}), ...(init.headers ?? {}) } });
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) cookie = setCookie.split(";")[0];
   const text = await response.text();
   let body = null;
   try { body = JSON.parse(text); } catch { body = text; }
@@ -60,9 +63,14 @@ try {
   const health = await api("/api/health");
   check(health.status === 200, `server reachable at ${base}`);
 
+  const signup = await api("/api/auth/signup", { method: "POST", body: JSON.stringify({ name: "Smoke Tester", email: `smoke-${Date.now()}@example.com`, password: "smoke-test-password" }) });
+  check(signup.status === 201 && cookie.startsWith("orbis_session="), "owner signs up and gets a session");
+  const me = await api("/api/auth/me");
+  check(me.body?.user?.name === "Smoke Tester", "session is recognised by the server");
+
   const created = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "Collab smoke test", template: "bedroom" }) });
-  check(created.status === 201 && created.body.id && created.body.ownerKey, "owner creates a project and gets an owner key");
-  const { id, ownerKey } = created.body;
+  check(created.status === 201 && created.body.id, "signed-in owner creates a project");
+  const { id } = created.body;
 
   const page = await fetch(`${base}/project/${id}`);
   const html = await page.text();
@@ -112,11 +120,17 @@ try {
   check(restored?.position.x === 0.5 && bobAgain.seq === alice.seq, "rejoin restores the latest scene");
   check(bobAgain.scene.furniture.length === alice.scene.furniture.length + 1, "nothing lost or duplicated after rejoin");
 
+  const listed = await api("/api/projects");
+  check(listed.body.projects?.some((project) => project.id === id && project.owned), "the project is on the owner's dashboard");
+
   // Clean up: only the owner can delete.
+  const ownerCookie = cookie;
+  cookie = "";
   const denied = await api(`/api/projects/${id}`, { method: "DELETE" });
-  check(denied.status === 403, "deleting without the owner key is refused (public mode)");
+  cookie = ownerCookie;
+  check(denied.status === 403, "a guest can't delete someone else's project (public mode)");
   const deleting = alice.next((message) => message.type === "project-deleted").catch(() => null);
-  const deleted = await api(`/api/projects/${id}`, { method: "DELETE", headers: { "x-owner-key": ownerKey } });
+  const deleted = await api(`/api/projects/${id}`, { method: "DELETE" });
   check(deleted.status === 200, "owner deletes the project");
   check(Boolean(await deleting), "connected collaborators are told the project was deleted");
   check((await closeCodeFor(id)) === 4004, "a link to a deleted project shows 'not found' (public mode)");

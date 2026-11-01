@@ -9,7 +9,10 @@ import { usePerfStore, viewportBridge } from "../lib/perf";
 import { useContextMenu } from "../lib/ui";
 import { FurnitureModel } from "./viewport/FurnitureModel";
 import { CutoutModel, isCutout } from "./viewport/CutoutModel";
+import { ImportedModel, importedModelUrl, ModelBoundary } from "./viewport/ImportedModel";
 import { RoomShell } from "./viewport/Room";
+import { UnderlayPlane } from "./viewport/Underlay";
+import { AnnotationController, Annotations } from "./viewport/Annotations";
 import { ARTIFICIAL_LIGHT_FACTOR, SceneEnvironment } from "./viewport/Environment";
 import { MeshEditor } from "./viewport/MeshEditor";
 import { hasRealisticModel, preloadModels, RealisticModel } from "./viewport/RealisticModel";
@@ -41,6 +44,7 @@ const FurnitureItem = memo(function FurnitureItem({
   const { width, depth, height } = item.dimensions;
   const light = item.light;
   const lightOn = !!light?.on && lightScale > 0;
+  const importedUrl = useMemo(() => importedModelUrl(item), [item]);
   const outline = selected ? "#6a3de8" : severity === "error" ? "#d9443a" : severity === "warning" ? "#d9921f" : peerColor;
   return (
     <group
@@ -61,7 +65,13 @@ const FurnitureItem = memo(function FurnitureItem({
         useContextMenu.getState().open(event.nativeEvent.clientX, event.nativeEvent.clientY, item.id);
       }}
     >
-      {isCutout(item) ? (
+      {importedUrl ? (
+        <ModelBoundary fallback={<FurnitureModel item={item} lowDetail={lowDetail} castShadow={shadows && !lowDetail} lightOn={lightOn} />}>
+          <Suspense fallback={<FurnitureModel item={item} lowDetail={lowDetail} castShadow={false} lightOn={lightOn} />}>
+            <ImportedModel item={item} url={importedUrl} castShadow={shadows && !lowDetail} />
+          </Suspense>
+        </ModelBoundary>
+      ) : isCutout(item) ? (
         <Suspense fallback={<FurnitureModel item={{ ...item, catalogItemId: undefined }} lowDetail castShadow={false} lightOn={false} />}>
           <CutoutModel item={item} castShadow={shadows} />
         </Suspense>
@@ -523,6 +533,8 @@ export function SceneViewport() {
           {scene.rooms.filter((entry) => visibleRooms.has(entry.id)).map((entry) => (
             <RoomShell key={entry.id} room={entry} cutaway showDimensions={!lowDetail && entry.id === room.id} />
           ))}
+          {scene.underlay && (!scene.underlay.roomId || visibleRooms.has(scene.underlay.roomId)) ? <UnderlayPlane underlay={scene.underlay} rooms={scene.rooms} /> : null}
+          <Annotations annotations={scene.annotations ?? []} rooms={scene.rooms} visibleRooms={visibleRooms} />
         </>
       ) : null}
       {scene.furniture.map((item) => {
@@ -586,6 +598,7 @@ export function SceneViewport() {
         </GizmoHelper>
       ) : null}
       <PlacementController />
+      <AnnotationController />
       <PresenceCursors />
       <PlacementGhost />
       <DropBridge />

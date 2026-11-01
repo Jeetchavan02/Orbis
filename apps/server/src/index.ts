@@ -10,6 +10,7 @@ import { networkInterfaces } from "node:os";
 import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
 import { AiQuotaError, AiUnavailableError, aiModel, assembleRoom, runAiEdit, runBriefToRoom, runImageToRoom, runPlanAnalyze } from "./ai.js";
 import { SceneSession, type ClientHandle } from "./sessions.js";
+import { Accounts } from "./auth.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Secrets live in apps/.env (or server/.env); they are only ever read on the server.
@@ -45,9 +46,19 @@ const TEMPLATE_FILES: Record<string, string> = {
 };
 
 const app = express();
-app.use(express.json({ limit: "25mb" }));
+// Behind Railway/Render/Fly the TLS proxy sets X-Forwarded-Proto; trust it so secure cookies and https links work.
+app.set("trust proxy", 1);
+app.use(express.json({ limit: "40mb" }));
+
+const accounts = new Accounts(DATA_ROOT, {
+  production: PRODUCTION,
+  googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || null,
+  // Without an email provider, reset links are logged on the server; dev/demo builds also show them on the page.
+  showResetLinks: process.env.ORBIS_SHOW_RESET_LINKS ? process.env.ORBIS_SHOW_RESET_LINKS === "1" : !PRODUCTION,
+});
+app.use("/api/auth", accounts.router());
 const server = createServer(app);
-const websocketServer = new WebSocketServer({ server, path: "/ws", maxPayload: 25 * 1024 * 1024 });
+const websocketServer = new WebSocketServer({ server, path: "/ws", maxPayload: 40 * 1024 * 1024 });
 
 const sessions = new Map<string, Promise<SceneSession>>();
 const saveTimers = new Map<string, NodeJS.Timeout>();
@@ -152,6 +163,27 @@ async function isOwner(id: string, key: string | undefined) {
   return !!key && hashKey(key) === hash;
 }
 
+// ---------- Project owners (account id) ----------
+const PROJECT_USERS_FILE = resolve(DATA_ROOT, "project-owners.json");
+let projectUsers: Record<string, string> | null = null;
+async function loadProjectUsers() {
+  if (projectUsers) return projectUsers;
+  try {
+    projectUsers = JSON.parse(await readFile(PROJECT_USERS_FILE, "utf8")) as Record<string, string>;
+  } catch {
+    projectUsers = {};
+  }
+  return projectUsers;
+}
+async function setProjectUser(id: string, userId: string | null) {
+  const map = await loadProjectUsers();
+  if (userId) map[id] = userId;
+  else delete map[id];
+  await mkdir(DATA_ROOT, { recursive: true });
+  await writeFile(PROJECT_USERS_FILE + ".tmp", JSON.stringify(map, null, 2));
+  await rename(PROJECT_USERS_FILE + ".tmp", PROJECT_USERS_FILE);
+}
+
 const sceneExists = (id: string) => sessions.has(id) || existsSync(scenePath(id));
 
 async function writeProject(scene: Scene) {
@@ -162,9 +194,16 @@ async function writeProject(scene: Scene) {
 app.get("/api/projects", async (request, response) => {
   await mkdir(DATA_DIR, { recursive: true });
   // On a public server nobody gets a list of everyone's projects: the browser asks for the ids it knows.
-  const wanted = typeof request.query.ids === "string" ? new Set(request.query.ids.split(",").filter((id) => SCENE_ID_PATTERN.test(id))) : null;
+  const wanted = new Set(typeof request.query.ids === "string" ? request.query.ids.split(",").filter((id) => SCENE_ID_PATTERN.test(id)) : []);
+  const user = await accounts.userFor(request);
+  const ownerOf = await loadProjectUsers();
+  // Signed in: your own projects plus the ones you opened from a share link.
+  if (user) {
+    for (const [id, owner] of Object.entries(ownerOf)) if (owner === user.id) wanted.add(id);
+    for (const id of user.recent) wanted.add(id);
+  }
   let files = (await readdir(DATA_DIR)).filter((file) => file.endsWith(".json"));
-  if (PUBLIC) files = files.filter((file) => wanted?.has(file.replace(/\.json$/, "")) ?? false);
+  if (PUBLIC) files = files.filter((file) => wanted.has(file.replace(/\.json$/, "")));
   const projects = [];
   for (const file of files) {
     const id = file.replace(/\.json$/, "");
@@ -174,6 +213,7 @@ app.get("/api/projects", async (request, response) => {
     projects.push({
       id, name: scene.name, roomType: scene.roomType ?? (scene.rooms.length > 1 ? "apartment" : "bedroom"),
       objects: scene.furniture.length, floors: scene.rooms.length, updatedAt: info.mtime.toISOString(),
+      owned: !!user && ownerOf[id] === user.id, shared: !!user && !!ownerOf[id] && ownerOf[id] !== user.id,
       thumbnail: existsSync(thumbPath(id)) ? `/api/projects/${id}/thumbnail?v=${(await stat(thumbPath(id))).mtimeMs}` : null,
     });
   }
@@ -182,6 +222,8 @@ app.get("/api/projects", async (request, response) => {
 });
 
 app.post("/api/projects", async (request, response) => {
+  const user = await accounts.userFor(request);
+  if (PUBLIC && !user) return response.status(401).json({ error: "Sign in to create projects." });
   const { name, roomType, template, width, depth, scene: provided } = (request.body ?? {}) as { name?: string; roomType?: string; template?: string; width?: number; depth?: number; scene?: unknown };
   const title = (name ?? "").trim().slice(0, 80) || "Untitled project";
   let scene: Scene;
@@ -205,6 +247,7 @@ app.post("/api/projects", async (request, response) => {
   const id = newProjectId(title);
   scene = { ...scene, id, name: title, roomType: roomType || scene.roomType };
   await writeProject(scene);
+  if (user) await setProjectUser(id, user.id);
   response.status(201).json({ id, ownerKey: await claim(id) });
 });
 
@@ -212,9 +255,12 @@ app.post("/api/projects/:id/duplicate", async (request, response) => {
   if (!SCENE_ID_PATTERN.test(request.params.id)) return response.status(400).json({ error: "Invalid project id." });
   const scene = await currentScene(request.params.id);
   if (!scene) return response.status(404).json({ error: "Project not found." });
+  const user = await accounts.userFor(request);
+  if (PUBLIC && !user) return response.status(401).json({ error: "Sign in to duplicate projects." });
   const name = scene.name + " (copy)";
   const id = newProjectId(name);
   await writeProject({ ...scene, id, name });
+  if (user) await setProjectUser(id, user.id);
   if (existsSync(thumbPath(request.params.id))) await copyFile(thumbPath(request.params.id), thumbPath(id));
   response.status(201).json({ id, ownerKey: await claim(id) });
 });
@@ -241,13 +287,17 @@ app.patch("/api/projects/:id", async (request, response) => {
 app.delete("/api/projects/:id", async (request, response) => {
   const id = request.params.id;
   if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
-  if (!(await isOwner(id, request.get("x-owner-key")))) return response.status(403).json({ error: "Only the person who created this project can delete it." });
+  const user = await accounts.userFor(request);
+  const ownedByUser = !!user && (await loadProjectUsers())[id] === user.id;
+  if (!ownedByUser && !(await isOwner(id, request.get("x-owner-key")))) return response.status(403).json({ error: "Only the person who created this project can delete it." });
   const live = sessions.get(id);
   sessions.delete(id);
   clearTimeout(saveTimers.get(id));
   saveTimers.delete(id);
   if (live) (await live).closeAll({ type: "project-deleted" });
   await setOwner(id, null);
+  await setProjectUser(id, null);
+  await accounts.forgetProject(id);
   await unlink(scenePath(id)).catch(() => undefined);
   await unlink(thumbPath(id)).catch(() => undefined);
   response.json({ ok: true });
@@ -263,25 +313,31 @@ app.put("/api/projects/:id/thumbnail", async (request, response) => {
   response.json({ ok: true });
 });
 
-// Photo cutouts (transparent PNGs) used by "Photo → 3D" objects.
+// Uploaded images (photo cutouts, floor-plan underlays) and imported 3D models, stored in the data dir.
 const ASSET_DIR = resolve(DATA_ROOT, "assets");
-const ASSET_ID = /^[a-z0-9-]{8,64}$/;
+const ASSET_FILE = /^[a-z0-9-]{8,64}\.(png|jpg|webp|glb)$/;
+const IMAGE_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 app.post("/api/assets", async (request, response) => {
-  const dataUrl = String((request.body as { dataUrl?: string })?.dataUrl ?? "");
-  const match = /^data:image\/png;base64,(.+)$/.exec(dataUrl);
-  if (!match) return response.status(400).json({ error: "Expected a PNG data URL." });
-  const bytes = Buffer.from(match[1]!, "base64");
-  if (bytes.length > 8 * 1024 * 1024) return response.status(413).json({ error: "Image is larger than 8 MB." });
-  const id = "cutout-" + randomUUID().slice(0, 12);
+  const body = (request.body ?? {}) as { dataUrl?: string; kind?: string };
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,(.+)$/.exec(String(body.dataUrl ?? ""));
+  const ext = match ? (IMAGE_TYPES[match[1]!] ?? (match[1] === "model/gltf-binary" || match[1] === "application/octet-stream" ? "glb" : null)) : null;
+  if (!match || !ext) return response.status(400).json({ error: "Expected a PNG, JPG, WebP or GLB data URL." });
+  const bytes = Buffer.from(match[2]!, "base64");
+  const limit = ext === "glb" ? 20 * 1024 * 1024 : 8 * 1024 * 1024;
+  if (bytes.length > limit) return response.status(413).json({ error: `File is larger than ${limit / 1024 / 1024} MB.` });
+  if (ext === "glb" && bytes.subarray(0, 4).toString("latin1") !== "glTF") return response.status(400).json({ error: "That isn't a valid .glb file." });
+  const prefix = ext === "glb" ? "model" : body.kind === "plan" ? "plan" : "cutout";
+  const file = `${prefix}-${randomUUID().slice(0, 12)}.${ext}`;
   await mkdir(ASSET_DIR, { recursive: true });
-  await writeFile(resolve(ASSET_DIR, id + ".png"), bytes);
-  response.json({ id, url: `/api/assets/${id}.png` });
+  await writeFile(resolve(ASSET_DIR, file), bytes);
+  response.json({ id: file.replace(/\.[a-z]+$/, ""), url: `/api/assets/${file}` });
 });
 app.get("/api/assets/:file", (request, response) => {
-  const id = request.params.file.replace(/\.png$/, "");
-  const path = resolve(ASSET_DIR, id + ".png");
-  if (!ASSET_ID.test(id) || !existsSync(path)) return response.status(404).end();
+  const file = request.params.file;
+  const path = resolve(ASSET_DIR, file);
+  if (!ASSET_FILE.test(file) || !existsSync(path)) return response.status(404).end();
   response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  if (file.endsWith(".glb")) response.type("model/gltf-binary");
   response.sendFile(path);
 });
 
@@ -394,6 +450,8 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
   }
   alive.set(socket, true);
   socket.on("pong", () => alive.set(socket, true));
+  // Signed-in collaborators see projects they've joined on their dashboard.
+  void accounts.userFromCookie(request.headers.cookie).then((user) => user && accounts.touchProject(user, sceneId)).catch(() => undefined);
   const handle: ClientHandle = {
     send: (message: ServerMessage) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
@@ -444,7 +502,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 server.listen(port, HOST, () => {
-  console.log(`Reality Builder ${PRODUCTION ? "server" : "API"} listening at http://${HOST}:${port}${PUBLIC ? " (public mode)" : ""} · data in ${DATA_ROOT}`);
+  console.log(`Orbis ${PRODUCTION ? "server" : "API"} listening at http://${HOST}:${port}${PUBLIC ? " (public mode)" : ""} · data in ${DATA_ROOT}`);
 });
 
 async function shutdown() {

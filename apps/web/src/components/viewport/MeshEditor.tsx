@@ -61,9 +61,12 @@ export function MeshEditor({ item, mode }: { item: FurnitureObject; mode: "verte
 
   if (!mesh || !geometry) return null;
   const vertex = selection.vertex;
-  const vertexPosition: [number, number, number] | null = vertex === null
+  const chosen = selection.vertices.filter((index) => index * 3 < mesh.positions.length);
+  const chosenSet = new Set(chosen);
+  // The gizmo sits at the centroid of the selected vertices and moves them all together.
+  const vertexPosition: [number, number, number] | null = chosen.length === 0
     ? null
-    : [mesh.positions[vertex * 3]!, mesh.positions[vertex * 3 + 1]!, mesh.positions[vertex * 3 + 2]!];
+    : [0, 1, 2].map((axis) => chosen.reduce((sum, index) => sum + mesh.positions[index * 3 + axis]!, 0) / chosen.length) as [number, number, number];
   const radius = Math.max(0.012, Math.min(0.03, Math.max(item.dimensions.width, item.dimensions.depth) * 0.02));
 
   return (
@@ -73,7 +76,7 @@ export function MeshEditor({ item, mode }: { item: FurnitureObject; mode: "verte
         onClick={(event) => {
           event.stopPropagation();
           // Non-indexed geometry: faceIndex equals the source triangle index.
-          if (mode === "face" && event.faceIndex != null) setMeshSelection({ face: faceTriangles(mesh, event.faceIndex), vertex: null });
+          if (mode === "face" && event.faceIndex != null) setMeshSelection({ face: faceTriangles(mesh, event.faceIndex), vertex: null, vertices: [] });
         }}
       >
         <meshStandardMaterial color={item.color ?? "#9aa39e"} roughness={0.7} flatShading transparent opacity={0.92} />
@@ -93,18 +96,21 @@ export function MeshEditor({ item, mode }: { item: FurnitureObject; mode: "verte
               position={[mesh.positions[index * 3]!, mesh.positions[index * 3 + 1]!, mesh.positions[index * 3 + 2]!]}
               onClick={(event) => {
                 event.stopPropagation();
-                setMeshSelection({ vertex: index, face: null });
+                const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+                if (!additive) return setMeshSelection({ vertex: index, vertices: [index], face: null });
+                const next = chosenSet.has(index) ? chosen.filter((entry) => entry !== index) : [...chosen, index];
+                setMeshSelection({ vertex: next.length ? next[next.length - 1]! : null, vertices: next, face: null });
               }}
               renderOrder={3}
             >
-              <sphereGeometry args={[index === vertex ? radius * 1.5 : radius, 10, 10]} />
-              <meshBasicMaterial color={index === vertex ? "#1f7a5c" : "#ffffff"} depthTest={false} />
+              <sphereGeometry args={[chosenSet.has(index) ? radius * 1.5 : radius, 10, 10]} />
+              <meshBasicMaterial color={chosenSet.has(index) ? "#6a3de8" : "#ffffff"} depthTest={false} />
             </mesh>
           ))
         : null}
       {mode === "vertex" && vertexPosition ? (
         <>
-          <object3D ref={setHandle} position={vertexPosition} key={vertex + ":" + vertexPosition.join(",")} />
+          <object3D ref={setHandle} position={vertexPosition} key={chosen.join("-") + ":" + vertexPosition.join(",")} />
           {handle ? (
             <TransformControls
               object={handle}
@@ -112,10 +118,10 @@ export function MeshEditor({ item, mode }: { item: FurnitureObject; mode: "verte
               size={0.6}
               translationSnap={0.01}
               onMouseUp={() => {
-                if (vertex === null) return;
+                if (chosen.length === 0) return;
                 const delta: [number, number, number] = [handle.position.x - vertexPosition[0], handle.position.y - vertexPosition[1], handle.position.z - vertexPosition[2]];
                 if (Math.hypot(...delta) < 1e-5) return;
-                commitMesh(item, moveVertices(mesh, [vertex], delta), "Move vertex");
+                commitMesh(item, moveVertices(mesh, chosen, delta), chosen.length === 1 ? "Move vertex" : `Move ${chosen.length} vertices`);
               }}
             />
           ) : null}

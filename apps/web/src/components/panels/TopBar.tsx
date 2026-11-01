@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { OrbisMark } from "../brand/Logo";
 import { Bell, Home, PersonStanding, Sparkles, Users } from "lucide-react";
 import { useAskAi, useShareDialog } from "../../lib/ui";
 import { Check, ChevronDown, Layers, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
@@ -66,9 +67,9 @@ export function TopBar() {
     <header className="topbar">
       <div className="topbar-left">
         <a className="icon-button" href="/" title="Back to projects" aria-label="Back to projects"><Home size={16} /></a>
-        <div className="brand" aria-label="Reality Builder">
-          <span className="brand-mark"><span /><span /><span /><span /></span>
-          <span className="brand-name">Reality Builder</span>
+        <div className="brand" aria-label="Orbis">
+          <span className="brand-mark"><OrbisMark size={20} /></span>
+          <span className="brand-name">Orbis</span>
         </div>
         <span className="divider" />
         <input

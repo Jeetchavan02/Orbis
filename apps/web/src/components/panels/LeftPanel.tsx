@@ -3,6 +3,8 @@ import { ArrowDownToLine, ImageUp, Settings, ArrowUpToLine, ChevronRight, CopyPl
 import { boundsDimensions, meshBounds } from "@reality-builder/shared";
 import { catalogById, type GroupId } from "../../data/catalog";
 import { importModelFile } from "../../lib/glb";
+import { uploadModelFile } from "../../lib/assets";
+import { GLB_PREFIX, meshSignature } from "../viewport/ImportedModel";
 import { activeRoom, placeEntry } from "../../lib/placement";
 import { insertFloor } from "../../lib/floors";
 import { usePhotoDialog, useSettingsDialog } from "../../lib/ui";
@@ -43,19 +45,23 @@ export function LeftPanel() {
     if (!room) return;
     setImporting(true);
     try {
-      const model = await importModelFile(file);
+      const isGlb = file.name.toLowerCase().endsWith(".glb");
+      // .glb files are also stored as-is so their materials and textures render; .gltf (external files) imports geometry only.
+      const [model, stored] = await Promise.all([importModelFile(file), isGlb ? uploadModelFile(file).catch((error: Error) => { notify("info", "Textures not kept: " + error.message); return null; }) : Promise.resolve(null)]);
+      const file_ = stored?.url.split("/").pop();
+      const catalogItemId = file_ ? `${GLB_PREFIX}${file_}|${meshSignature(model.mesh)}` : "imported";
       const id = newEntityId("obj");
       const ok = dispatch({
         type: "furniture.create",
         furniture: {
-          id, roomId: room.id, name: model.name, category: "other", catalogItemId: "imported",
+          id, roomId: room.id, name: model.name, category: "other", catalogItemId,
           position: { x: room.position.x, y: room.position.y, z: room.position.z }, yawDegrees: 0,
           dimensions: boundsDimensions(meshBounds(model.mesh)), color: "#b4a99a", mesh: model.mesh, version: 1,
         },
       }, { label: "Import " + model.name });
       if (ok) {
         select(id);
-        notify("success", `Imported ${model.name} (${model.triangles.toLocaleString()} triangles)${model.scaledFrom ? ` — rescaled from ${model.scaledFrom.toFixed(2)} units to 1 m` : ""}.`);
+        notify("success", `Imported ${model.name} (${model.triangles.toLocaleString()} triangles${file_ ? ", with materials" : ""})${model.scaledFrom ? ` — rescaled from ${model.scaledFrom.toFixed(2)} units to 1 m` : ""}.`);
       }
     } catch (error) {
       notify("error", (error as Error).message);

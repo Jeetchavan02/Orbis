@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Ruler, Type } from "lucide-react";
+import { startAnnotating, useAnnotate } from "../../lib/tools";
+import { ShortcutButton } from "../panels/Shortcuts";
 import { Camera, Check, Eye, Pencil, ChevronDown, Crosshair, Expand, Footprints, Grid3X3, Hand, Maximize2, MousePointer2, Move3D, RectangleHorizontal, Rotate3D, Rotate3d, Waypoints } from "lucide-react";
 import { viewportBridge } from "../../lib/perf";
 import { useWorkspaceStore, type TransformTool, type ViewMode } from "../../store/workspace";
@@ -14,9 +17,9 @@ export const CAMERAS: { id: ViewMode; label: string }[] = [
 ];
 
 export const TOOLS: { id: TransformTool; label: string; key: string; icon: typeof Move3D; mesh?: boolean }[] = [
-  { id: "select", label: "Select", key: "Q", icon: MousePointer2 },
+  { id: "select", label: "Select", key: "A", icon: MousePointer2 },
   { id: "translate", label: "Move", key: "W", icon: Move3D },
-  { id: "rotate", label: "Rotate", key: "E", icon: Rotate3D },
+  { id: "rotate", label: "Rotate", key: "O", icon: Rotate3D },
   { id: "scale", label: "Scale", key: "R", icon: Maximize2 },
   { id: "vertex", label: "Vertex", key: "V", icon: Waypoints, mesh: true },
   { id: "face", label: "Face", key: "G", icon: RectangleHorizontal, mesh: true },
@@ -26,6 +29,7 @@ const GRID_SIZES = [0.1, 0.25, 0.5, 1];
 
 /** Floating viewport controls: camera preset, tool pill, navigation and capture buttons, grid spacing. */
 export function ViewportChrome({ container }: { container: React.RefObject<HTMLDivElement | null> }) {
+  const annotate = useAnnotate((state) => state.mode);
   const viewMode = useWorkspaceStore((state) => state.viewMode);
   const tool = useWorkspaceStore((state) => state.tool);
   const panMode = useWorkspaceStore((state) => state.panMode);
@@ -72,6 +76,10 @@ export function ViewportChrome({ container }: { container: React.RefObject<HTMLD
         <button type="button" onClick={() => (selected ? requestFocus() : requestCameraReset())} title={selected ? "Frame selection (F)" : "Frame room (H)"}><Crosshair size={16} /></button>
         <button type="button" className={showGrid ? "active" : ""} aria-pressed={showGrid} onClick={() => setGrid({ showGrid: !showGrid })} title="Toggle grid" disabled={!threeD}><Grid3X3 size={16} /></button>
         <button type="button" className={showRoutes ? "active" : ""} aria-pressed={showRoutes} onClick={() => setShowRoutes(!showRoutes)} title="Show walking routes from the door"><Footprints size={16} /></button>
+        <span className="vp-sep" />
+        <button type="button" className={annotate === "line" ? "active" : ""} aria-pressed={annotate === "line"} onClick={() => startAnnotating("line")} title="Line / measure (L)" disabled={!threeD}><Ruler size={16} /></button>
+        <button type="button" className={annotate === "text" ? "active" : ""} aria-pressed={annotate === "text"} onClick={() => startAnnotating("text")} title="Text label (T)" disabled={!threeD}><Type size={16} /></button>
+        <ShortcutButton />
       </div>
 
       {threeD && viewMode !== "walk" ? (
