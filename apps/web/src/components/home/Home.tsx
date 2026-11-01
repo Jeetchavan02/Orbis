@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, Bell, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
-  Search, Settings, ShieldCheck, Sparkles, Trash2, Users, X, Zap,
+  ArrowRight, Bell, ChevronRight, PanelLeft, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
+  Search, Settings, ShieldCheck, Sparkles, Trash2, Upload, Users, X, Zap,
 } from "lucide-react";
 import { catalog, GROUPS, type GroupId } from "../../data/catalog";
 import { useThumbnail } from "../../lib/thumbnails";
 import { loadProfile, saveDefaultProfile } from "../../lib/collab";
+import { UploadPlan } from "./UploadPlan";
 import { BlankRoomArt, HeroArt, ROOM_ART } from "./Illustrations";
 
 type Project = { id: string; name: string; roomType: string; objects: number; floors: number; updatedAt: string; thumbnail: string | null };
-type View = "home" | "projects" | "templates" | "library" | "team" | "settings";
+type View = "upload" | "home" | "projects" | "templates" | "library" | "team" | "settings";
 type Draft = { name: string; roomType: string; template: string | null; width: number; depth: number };
 
 const TEMPLATES: { id: keyof typeof ROOM_ART; label: string; name: string; roomType: string }[] = [
@@ -43,6 +44,13 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 function initials(name: string) {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+}
+
+const BADGE_COLORS = ["#b9a4f5", "#f2a7a0", "#9cc7ef", "#a6dcc0", "#f3cf8a"];
+function badgeColor(id: string) {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return BADGE_COLORS[hash % BADGE_COLORS.length];
 }
 
 function ProjectThumb({ project }: { project: Project }) {
@@ -172,6 +180,8 @@ export function Home() {
   const [bell, setBell] = useState(false);
   const [libraryGroup, setLibraryGroup] = useState<GroupId | "all">("all");
   const [profile, setProfile] = useState(loadProfile);
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("rb.sidebar") === "1"; } catch { return false; } });
+  const toggleCollapsed = () => setCollapsed((value) => { try { localStorage.setItem("rb.sidebar", value ? "0" : "1"); } catch { /* ignore */ } return !value; });
   const load = () => api<{ projects: Project[] }>("/api/projects").then((data) => setProjects(data.projects)).catch((failure) => setError((failure as Error).message));
   useEffect(() => void load(), []);
 
@@ -182,13 +192,27 @@ export function Home() {
     objects: catalog.filter((entry) => entry.name.toLowerCase().includes(needle)),
   } : null, [needle, projects]);
 
-  const startTemplate = (template: (typeof TEMPLATES)[number]) => setDraft({ name: template.name, roomType: template.roomType, template: template.id, width: 4.5, depth: 4 });
+  const [opening, setOpening] = useState<string | null>(null);
+  const createFrom = async (body: Draft) => {
+    if (opening) return;
+    setOpening(body.template ?? "blank");
+    try {
+      const { id } = await api<{ id: string }>("/api/projects", { method: "POST", body: JSON.stringify(body) });
+      openProject(id);
+    } catch (failure) {
+      setOpening(null);
+      alert((failure as Error).message);
+    }
+  };
+  const startTemplate = (template: (typeof TEMPLATES)[number]) => void createFrom({ name: template.name, roomType: template.roomType, template: template.id, width: 4.5, depth: 4 });
   const startBlank = (width = 5, depth = 4) => setDraft({ name: "New room", roomType: "bedroom", template: null, width, depth });
   const firstName = profile.name.split(/\s+/)[0];
 
   const nav: { id: View; label: string; icon: typeof HomeIcon }[] = [
-    { id: "home", label: "Home", icon: HomeIcon }, { id: "projects", label: "Projects", icon: FolderOpen }, { id: "templates", label: "Templates", icon: LayoutGrid },
-    { id: "library", label: "Library", icon: Boxes }, { id: "team", label: "Team", icon: Users },
+    { id: "home", label: "Home", icon: HomeIcon }, { id: "projects", label: "All projects", icon: FolderOpen },
+  ];
+  const explore: { id: View; label: string; icon: typeof HomeIcon }[] = [
+    { id: "templates", label: "Templates", icon: LayoutGrid }, { id: "library", label: "Library", icon: Boxes }, { id: "team", label: "Collaborate", icon: Users },
   ];
 
   const templateRow = (
@@ -196,8 +220,8 @@ export function Home() {
       {TEMPLATES.map((template) => {
         const Art = ROOM_ART[template.id];
         return (
-          <button key={template.id} type="button" className="template-card" onClick={() => startTemplate(template)} title={`Start a new ${template.label.toLowerCase()} project`}>
-            <div className="template-art"><Art /></div>
+          <button key={template.id} type="button" className="template-card" disabled={opening !== null} onClick={() => startTemplate(template)} title={`Open a new ${template.label.toLowerCase()} project`}>
+            <div className="template-art"><Art />{opening === template.id ? <span className="template-busy"><Loader2 size={20} className="spin" /></span> : null}</div>
             <strong>{template.label}</strong>
           </button>
         );
@@ -205,16 +229,41 @@ export function Home() {
     </div>
   );
 
+  if (view === "upload") return <UploadPlan onBack={() => setView("home")} />;
+
   return (
     <div className="home">
-      <aside className="home-sidebar">
-        <div className="home-brand"><span className="brand-cube"><Box size={22} /></span><span><strong>Reality Builder</strong><small>3D Room Design &amp; Collaboration</small></span></div>
-        <nav>
-          {nav.map((item) => <button key={item.id} type="button" className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><item.icon size={19} /> {item.label}</button>)}
+      <aside className={"home-sidebar" + (collapsed ? " home-sidebar--collapsed" : "")}>
+        <div className="hs-head">
+          <span className="brand-cube"><Box size={18} /></span>
+          <strong className="hs-title">Reality Builder</strong>
+          <button type="button" className="hs-toggle" onClick={toggleCollapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}><PanelLeft size={18} /></button>
+        </div>
+        <nav className="hs-group">
+          {nav.map((item) => <button key={item.id} type="button" className={view === item.id ? "active" : ""} onClick={() => setView(item.id)} title={item.label}><item.icon size={18} /><span>{item.label}</span></button>)}
+          <button type="button" onClick={() => startBlank()} title="New project"><Plus size={18} /><span>New project</span></button>
+          <button type="button" onClick={() => setView("upload")} title="Upload a floor plan"><Upload size={18} /><span>Upload a plan</span></button>
         </nav>
-        <div className="home-sidebar-foot">
-          <button type="button" className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><Settings size={19} /> Settings</button>
-          <div className="home-user"><span className="avatar avatar--lg" style={{ background: profile.color }}>{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>Local workspace</small></span></div>
+        <div className="hs-group">
+          <span className="hs-label">Projects</span>
+          {(projects ?? []).slice(0, 5).map((project) => (
+            <button key={project.id} type="button" className="hs-project" onClick={() => openProject(project.id)} title={project.name}>
+              <span className="hs-badge" style={{ background: badgeColor(project.id) }}>{initials(project.name)[0]}</span><span>{project.name}</span><ChevronRight size={15} className="hs-chev" />
+            </button>
+          ))}
+          {projects && projects.length > 5 ? <button type="button" className="hs-more" onClick={() => setView("projects")}><span>See all {projects.length}</span></button> : null}
+          {projects && !projects.length ? <p className="hs-empty">No projects yet</p> : null}
+        </div>
+        <div className="hs-group">
+          <span className="hs-label">Explore</span>
+          {explore.map((item) => <button key={item.id} type="button" className={view === item.id ? "active" : ""} onClick={() => setView(item.id)} title={item.label}><item.icon size={18} /><span>{item.label}</span></button>)}
+        </div>
+        <div className="hs-foot">
+          <div className="hs-plan">
+            <span className="avatar" style={{ background: profile.color }}>{initials(profile.name)}</span>
+            <span className="hs-plan-text"><small>Local workspace</small><strong>{profile.name}</strong></span>
+            <button type="button" className="icon-button" onClick={() => setView("settings")} title="Settings" aria-label="Settings"><Settings size={17} /></button>
+          </div>
         </div>
       </aside>
 
@@ -255,6 +304,7 @@ export function Home() {
                 <div className="hero-actions">
                   <button type="button" className="primary-button primary-button--lg" onClick={() => startBlank()}><Plus size={18} /> New Project</button>
                   <button type="button" className="ghost-button ghost-button--lg" onClick={() => setView("templates")}><Grid2X2 size={18} /> Browse Templates</button>
+                  <button type="button" className="ghost-button ghost-button--lg" onClick={() => setView("upload")}><Upload size={18} /> Upload a plan</button>
                 </div>
               </div>
               <HeroArt />
@@ -300,7 +350,7 @@ export function Home() {
             {templateRow}
             <div className="section-head"><h2>More starting points</h2></div>
             <div className="template-row">
-              <button type="button" className="template-card" onClick={() => setDraft({ name: "My Apartment", roomType: "apartment", template: "apartment", width: 7, depth: 5.6 })}><div className="template-art"><ROOM_ART.living /></div><strong>3-floor apartment</strong></button>
+              <button type="button" className="template-card" disabled={opening !== null} onClick={() => void createFrom({ name: "My Apartment", roomType: "apartment", template: "apartment", width: 7, depth: 5.6 })}><div className="template-art"><ROOM_ART.living />{opening === "apartment" ? <span className="template-busy"><Loader2 size={20} className="spin" /></span> : null}</div><strong>3-floor apartment</strong></button>
               <button type="button" className="template-card" onClick={() => startBlank()}><div className="template-art"><BlankRoomArt /></div><strong>Blank room</strong></button>
             </div>
           </div>

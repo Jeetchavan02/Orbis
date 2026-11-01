@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Home, PersonStanding, Users } from "lucide-react";
-import { useShareDialog } from "../../lib/ui";
+import { Bell, Home, PersonStanding, Sparkles, Users } from "lucide-react";
+import { useAskAi, useShareDialog } from "../../lib/ui";
 import { Check, ChevronDown, Layers, CloudOff, Download, FolderOpen, Gauge, Loader2, Moon, Redo2, RotateCcw, Save, Sun, Sunset, Undo2, Wifi } from "lucide-react";
 import type { EnvironmentMode } from "@reality-builder/shared";
 import { apartmentScene, starterScene } from "../../data/scene";
@@ -78,9 +78,12 @@ export function TopBar() {
           onBlur={() => (name.trim() && name !== scene.name ? dispatch({ type: "scene.update", patch: { name: name.trim() } }, { base: { scene: scene.settingsVersion } }) : setName(scene.name))}
           onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
         />
+        <button type="button" className="askai-button" onClick={() => useAskAi.getState().setOpen(!useAskAi.getState().open)} title="Ask AI to edit this room, design a new one, or read a photo (⌘K)">
+          <Sparkles size={15} /> Ask AI <kbd>⌘K</kbd>
+        </button>
         <span className={"save-state save-state--" + saveStatus.state} title={saveStatus.path ? "Saved to " + saveStatus.path : undefined}>
           {saveStatus.state === "saving" || saveStatus.state === "unsaved" ? <Loader2 size={12} className="spin" /> : saveStatus.state === "local" ? <CloudOff size={12} /> : <Check size={12} />}
-          {saveLabel}
+          <span>{saveLabel}</span>
         </span>
       </div>
 

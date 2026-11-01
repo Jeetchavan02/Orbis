@@ -16,6 +16,7 @@ import { catalogById, CATEGORY_LABELS, GROUPS, ROOM_TYPES, type CatalogItem } fr
 import { placeEntry, usePlacement } from "../../lib/placement";
 import { useThumbnail } from "../../lib/thumbnails";
 import { GroupIcon } from "./Library";
+import { InsightsPanel } from "./InsightsPanel";
 import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { commitMesh } from "../viewport/MeshEditor";
 import { ColorField, NumberField, Section, Toggle } from "./fields";
@@ -74,16 +75,23 @@ export function Inspector() {
   if (picked) return <CatalogDetails key={picked.id} entry={picked} />;
   if (item) return <ObjectInspector key={item.id} item={item} />;
   if (room) return <RoomInspector key={room.id} room={room} />;
+  // Nothing selected: a short how-to, then the room's health (score, sunlight, Vastu) in the same place.
   return (
-    <div className="empty-state">
-      <div className="empty-state-icon"><Box size={20} /></div>
-      <strong>Nothing selected</strong>
-      <span>Click an object in the viewport or the scene list. Drag items in from the Library.</span>
+    <div className="inspector-scroll">
+      <div className="empty-hint">
+        <div className="empty-state-icon"><Box size={18} /></div>
+        <div>
+          <strong>Nothing selected</strong>
+          <span>Click any object to edit it, or add one from the Library.</span>
+        </div>
+      </div>
       {scene.rooms.length ? (
-        <button type="button" className="ghost-button" onClick={() => useWorkspaceStore.getState().selectEntity(useWorkspaceStore.getState().activeRoomId)}>
-          Edit room, doors & windows
+        <button type="button" className="ghost-button full" onClick={() => useWorkspaceStore.getState().selectEntity(useWorkspaceStore.getState().activeRoomId)}>
+          Edit room size, walls, doors & windows
         </button>
       ) : null}
+      <div className="room-health-title">Room health</div>
+      <InsightsPanel embedded />
     </div>
   );
 }

@@ -7,7 +7,12 @@ import {
   type AiCatalogItem,
   type AiEditRequest,
   type AiEditResponse,
+  type AiBriefRequest,
   type AiImageRequest,
+  type AiPlanAnalyzeRequest,
+  type AiPlanAnalyzeResponse,
+  type AiRoomExtraction,
+  type PlanBuildSettings,
   type AiImageResponse,
   type AiToolCall,
   type BaseSceneAction,
@@ -17,12 +22,14 @@ import {
   type ValidationIssue,
   type WallSide,
 } from "@reality-builder/shared";
-import { requiredFrontClearance, roomToWorld, rotateYaw, validateScene } from "@reality-builder/spatial-engine";
+import { generateRecoveryCandidates, requiredFrontClearance, roomToWorld, rotateYaw, validateScene } from "@reality-builder/spatial-engine";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_ATTEMPTS = 3;
 
 export class AiUnavailableError extends Error {}
+/** Every model refused for quota/rate reasons. */
+export class AiQuotaError extends Error {}
 
 /** Preferred model first; later ones are used when a model is overloaded, retired, or too slow. */
 const COOLDOWN_MS = 5 * 60_000;
@@ -44,14 +51,28 @@ type Content = { role: "user" | "model"; parts: ({ text: string } | { inlineData
 
 type GeminiPayload = { candidates?: { content?: { parts?: { text?: string }[] } }[]; error?: { message?: string } };
 
-async function callModel(model: string, key: string, system: string, contents: Content[], signal: AbortSignal) {
+type CallOptions = {
+  /** Thinking token budget (0 = off, fastest). Omitted = the model's default. */
+  thinkingBudget?: number;
+  timeoutMs?: number;
+};
+/** Models that rejected a thinking budget; they are called without one from then on. */
+const noThinkingConfig = new Set<string>();
+
+async function callModel(model: string, key: string, system: string, contents: Content[], signal: AbortSignal, options: CallOptions = {}): Promise<{ text: string; model: string }> {
+  const thinking = options.thinkingBudget !== undefined && !noThinkingConfig.has(model) ? { thinkingConfig: { thinkingBudget: options.thinkingBudget } } : {};
   const response = await fetch(`${API_BASE}/${model}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { responseMimeType: "application/json", temperature: 0.2 } }),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { responseMimeType: "application/json", temperature: 0.2, ...thinking } }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs ?? 40_000)]),
   });
   const payload = (await response.json().catch(() => null)) as GeminiPayload | null;
+  // Some models reject a thinking budget with a generic 400: retry once without it and remember.
+  if (response.status === 400 && "thinkingConfig" in thinking) {
+    noThinkingConfig.add(model);
+    return callModel(model, key, system, contents, signal, options);
+  }
   if (!response.ok) {
     if (response.status === 404 || response.status === 429 || response.status >= 500) coolingDown.set(model, Date.now() + COOLDOWN_MS);
     throw new Error(`${model}: ${response.status} ${payload?.error?.message?.slice(0, 120) ?? response.statusText}`);
@@ -65,14 +86,14 @@ async function callModel(model: string, key: string, system: string, contents: C
  * Calls Gemini with JSON output. The two preferred models are raced in parallel (first good answer wins,
  * the other request is aborted); remaining models are tried if both fail. The key stays on the server.
  */
-async function generateJson(system: string, contents: Content[]): Promise<{ text: string; model: string }> {
+async function generateJson(system: string, contents: Content[], options: CallOptions = {}): Promise<{ text: string; model: string }> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new AiUnavailableError("GEMINI_API_KEY is not set on the server (apps/.env).");
   const chain = modelChain();
   const failures: string[] = [];
   const race = new AbortController();
   try {
-    const result = await Promise.any(chain.slice(0, 2).map((model) => callModel(model, key, system, contents, race.signal)));
+    const result = await Promise.any(chain.slice(0, 2).map((model) => callModel(model, key, system, contents, race.signal, options)));
     race.abort();
     return result;
   } catch (error) {
@@ -80,12 +101,64 @@ async function generateJson(system: string, contents: Content[]): Promise<{ text
   }
   for (const model of chain.slice(2)) {
     try {
-      return await callModel(model, key, system, contents, new AbortController().signal);
+      return await callModel(model, key, system, contents, new AbortController().signal, options);
     } catch (error) {
       failures.push((error as Error).message);
     }
   }
+  if (failures.length && failures.every((failure) => / 429 |quota|timeout|aborted/i.test(failure)) && failures.some((failure) => / 429 |quota/i.test(failure))) {
+    throw new AiQuotaError("The AI has hit its usage limit for now. Wait a minute and try again, or enable billing on the Gemini API key for higher limits.");
+  }
   throw new Error(`No Gemini model answered — ${failures.join("; ")}`);
+}
+
+const SYNONYMS: Record<string, string[]> = {
+  couch: ["sofa"], settee: ["sofa"], bookshelf: ["bookcase", "shelf"], shelf: ["bookcase", "shelf"], tv: ["tv", "television", "media"],
+  lamp: ["lamp", "light"], light: ["lamp", "light", "pendant"], plant: ["plant", "pot"], carpet: ["rug"], closet: ["wardrobe"],
+  table: ["table", "desk"], seat: ["chair", "stool", "armchair"], storage: ["cabinet", "dresser", "wardrobe", "shelf"],
+};
+const baseName = (name: string) => name.split(" — ")[0]!.trim().toLowerCase();
+
+/**
+ * The full catalogue is ~27k tokens; models answer faster and better from a short, relevant list.
+ * Items whose words appear in the request rank first; the rest is padded with one variant per product
+ * (colour variants collapsed) so the model still sees the range.
+ */
+export function shortlistCatalog(catalog: AiCatalogItem[], text: string, limit = 40) {
+  const words = text.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+  const terms = new Set(words.flatMap((word) => [word, word.replace(/s$/, ""), ...(SYNONYMS[word] ?? SYNONYMS[word.replace(/s$/, "")] ?? [])]));
+  const score = (entry: AiCatalogItem) => {
+    const name = entry.name.toLowerCase();
+    let total = 0;
+    for (const term of terms) {
+      if (name.includes(term)) total += 3;
+      if (entry.category.includes(term)) total += 2;
+    }
+    return total;
+  };
+  const ranked = catalog.map((entry) => ({ entry, score: score(entry) })).filter((row) => row.score > 0).sort((a, b) => b.score - a.score).map((row) => row.entry);
+  const picked = new Map<string, AiCatalogItem>();
+  for (const entry of ranked) if (picked.size < Math.ceil(limit * 0.6)) picked.set(entry.id, entry);
+  const seen = new Set([...picked.values()].map((entry) => baseName(entry.name)));
+  for (const entry of catalog) {
+    if (picked.size >= limit) break;
+    const base = baseName(entry.name);
+    if (seen.has(base)) continue;
+    seen.add(base);
+    picked.set(entry.id, entry);
+  }
+  return [...picked.values()];
+}
+
+/** One entry per product (colour variants collapsed): the whole range at a fraction of the tokens. */
+function distinctProducts(catalog: AiCatalogItem[]) {
+  const seen = new Set<string>();
+  return catalog.filter((entry) => {
+    const base = baseName(entry.name);
+    if (seen.has(base)) return false;
+    seen.add(base);
+    return true;
+  });
 }
 
 function fmt(value: number) {
@@ -293,15 +366,20 @@ export async function runAiEdit(request: AiEditRequest, newId: () => string): Pr
   const room = scene.rooms.find((entry) => entry.id === request.roomId) ?? scene.rooms[0];
   if (!room) throw new Error("The scene has no room.");
   const baseline = new Set(problems(validateScene(scene, { skipBlockerAnalysis: true }).issues).map((issue) => issue.id));
-  const contents: Content[] = [{ role: "user", parts: [{ text: `Scene:\n${describeScene(scene, catalog, room)}\n\nRequest: ${instruction}` }] }];
+  const history = request.history ?? [];
+  const shortlist = shortlistCatalog(catalog, [instruction, ...history.filter((turn) => turn.role === "user").map((turn) => turn.text)].join(" "));
+  // Earlier turns go in as plain text so follow-ups resolve ("move it a bit left").
+  const conversation: Content[] = history.map((turn) => ({ role: turn.role === "user" ? "user" : "model", parts: [{ text: turn.role === "user" ? `Request: ${turn.text}` : JSON.stringify({ summary: turn.text, calls: [] }) }] }));
+  const opening: Content = { role: "user", parts: [{ text: `Scene:\n${describeScene(scene, shortlist, room)}\n\nRequest: ${instruction}` }] };
+  let contents: Content[] = [...conversation, opening];
   const attempts: AiEditResponse["attempts"] = [];
   let best: { action: AiEditResponse["action"]; newIssues: ValidationIssue[]; summary: string } | null = null;
   let usedModel = aiModel();
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const { text, model } = await generateJson(EDIT_SYSTEM, contents);
+    // First try fast (no thinking); corrections get a small thinking budget.
+    const { text, model } = await generateJson(EDIT_SYSTEM, contents, { thinkingBudget: attempt === 1 ? 0 : 1024, timeoutMs: 25_000 });
     usedModel = model;
-    contents.push({ role: "model", parts: [{ text }] });
     let feedback: string;
 
     let plan;
@@ -310,7 +388,7 @@ export async function runAiEdit(request: AiEditRequest, newId: () => string): Pr
     } catch (error) {
       feedback = "Your response did not match the required JSON schema: " + (error instanceof Error ? error.message.slice(0, 600) : String(error));
       attempts.push({ attempt, calls: [], outcome: "malformed", feedback });
-      contents.push({ role: "user", parts: [{ text: feedback + "\nReturn corrected JSON only." }] });
+      contents = [...conversation, opening, { role: "model", parts: [{ text }] }, { role: "user", parts: [{ text: feedback + "\nReturn corrected JSON only." }] }];
       continue;
     }
     if (plan.calls.length === 0) {
@@ -335,7 +413,8 @@ export async function runAiEdit(request: AiEditRequest, newId: () => string): Pr
       feedback = "Your tool calls could not be applied: " + (error instanceof SceneActionError || error instanceof Error ? error.message : String(error));
       attempts.push({ attempt, calls: plan.calls, outcome: "invalid-action", feedback });
     }
-    contents.push({ role: "user", parts: [{ text: feedback + "\nPropose a corrected full set of calls (it replaces the previous proposal). JSON only." }] });
+    // Retries carry only the scene, the latest proposal and its problems, never the whole transcript.
+    contents = [...conversation, opening, { role: "model", parts: [{ text }] }, { role: "user", parts: [{ text: feedback + "\nPropose a corrected full set of calls (it replaces the previous proposal). JSON only." }] }];
   }
 
   return {
@@ -362,35 +441,79 @@ MEASUREMENTS ARE AUTHORITATIVE. First read every dimension written on the image 
 For a sketch or floor plan, include only furniture, doors and windows that are actually drawn or labelled; an empty outline means an empty room (objects: []). Do not invent furniture.
 Only use catalogItemIds from the provided catalog; map each visible piece to the closest one. Estimate realistic sizes from typical furniture dimensions. Put objects against walls where they appear to be. In notes, state what was uncertain.`;
 
+const BRIEF_SYSTEM = IMAGE_SYSTEM.replace("from one image: a photo, a hand-drawn sketch, or a floor plan.", "from a written brief (the user's description of the room they want). Design a sensible, well-furnished layout that matches the brief: furniture against walls, clear walkways, a door and at least one window. Set source to \"sketch\" and leave measurements empty unless the brief states sizes; any sizes stated in the brief are authoritative.");
+
+const catalogText = (catalog: AiCatalogItem[]) => JSON.stringify(distinctProducts(catalog).map((entry) => ({ catalogItemId: entry.id, name: entry.name, width: entry.dimensions.width, depth: entry.dimensions.depth, height: entry.dimensions.height })));
+
 export async function runImageToRoom(request: AiImageRequest, newId: () => string): Promise<AiImageResponse> {
-  const catalogText = JSON.stringify(request.catalog.map((entry) => ({ catalogItemId: entry.id, name: entry.name, width: entry.dimensions.width, depth: entry.dimensions.depth, height: entry.dimensions.height })));
-  const { text, model } = await generateJson(IMAGE_SYSTEM, [{
-    role: "user",
-    parts: [
-      { inlineData: { mimeType: request.mimeType, data: request.imageBase64 } },
-      { text: "Catalog:\n" + catalogText },
-    ],
-  }]);
+  return buildRoom(IMAGE_SYSTEM, [
+    { inlineData: { mimeType: request.mimeType, data: request.imageBase64 } },
+    { text: "Catalog:\n" + catalogText(request.catalog) },
+  ], request.catalog, newId);
+}
+
+export async function runBriefToRoom(request: AiBriefRequest, newId: () => string): Promise<AiImageResponse> {
+  return buildRoom(BRIEF_SYSTEM, [{ text: `Brief: ${request.brief}\n\nCatalog:\n${catalogText(request.catalog)}` }], request.catalog, newId);
+}
+
+async function extract(system: string, parts: Content["parts"]) {
+  const { text, model } = await generateJson(system, [{ role: "user", parts }], { thinkingBudget: 512, timeoutMs: 45_000 });
   const extraction = AiRoomExtractionSchema.parse(JSON.parse(text));
   // Written dimensions win over the model's own estimate; scale its object positions to match.
-  const written = (axis: "width" | "depth") => extraction.measurements.filter((entry) => entry.axis === axis && entry.meters >= 1.5 && entry.meters <= 20).sort((a, b) => b.meters - a.meters)[0];
+  const written = (axis: "width" | "depth") => extraction.measurements.filter((entry) => entry.axis === axis && entry.meters >= 1 && entry.meters <= 40).sort((a, b) => b.meters - a.meters)[0];
   const corrections: string[] = [];
+  const sources = { width: "estimated" as "written" | "estimated", depth: "estimated" as "written" | "estimated" };
+  // A room-size label ("17'-8\" X 17'-7\"") for the reconstructed room beats any other dimension, including the building's overall size.
+  const own = extraction.planRooms.find((room) => room.name.toLowerCase() === extraction.roomName.toLowerCase() && room.label)?.label
+    ?? extraction.measurements.find((entry) => parseSizeLabel(entry.label))?.label;
+  const size = own ? parseSizeLabel(own) : null;
+  if (size) {
+    const [width, depth] = size;
+    for (const object of extraction.objects) { object.x *= width / extraction.width; object.z *= depth / extraction.depth; }
+    for (const opening of extraction.openings) opening.offset *= (opening.wall === "north" || opening.wall === "south" ? width / extraction.width : depth / extraction.depth);
+    if (Math.abs(width - extraction.width) > 0.05 || Math.abs(depth - extraction.depth) > 0.05) corrections.push(`size set from the room label ${own} (model estimated ${extraction.width.toFixed(2)} × ${extraction.depth.toFixed(2)} m)`);
+    extraction.width = width;
+    extraction.depth = depth;
+    extraction.measurements = extraction.measurements.filter((entry) => entry.label === own);
+    if (!extraction.measurements.length) extraction.measurements.push({ label: own!, meters: width, axis: "width" });
+    return { extraction: { ...extraction, notes: (corrections.join("; ") + (corrections.length ? ". " : "") + extraction.notes).trim() }, sources: { width: "written" as const, depth: "written" as const }, model };
+  }
+  // For a multi-room plan the written dimensions include the whole building; the focused room's own label is used instead.
+  const multiRoom = extraction.planRooms.length > 1;
   for (const axis of ["width", "depth"] as const) {
-    const measured = written(axis);
-    if (!measured || Math.abs(measured.meters - extraction[axis]) < 0.01) continue;
+    const measured = multiRoom ? undefined : written(axis);
+    if (!measured) {
+      if (multiRoom || extraction.measurements.some((entry) => Math.abs(entry.meters - extraction[axis]) < 0.05)) sources[axis] = extraction.measurements.length ? "written" : "estimated";
+      continue;
+    }
+    sources[axis] = "written";
+    if (Math.abs(measured.meters - extraction[axis]) < 0.01) continue;
     const scale = measured.meters / extraction[axis];
     for (const object of extraction.objects) object[axis === "width" ? "x" : "z"] *= scale;
     for (const opening of extraction.openings) if ((axis === "width") === (opening.wall === "north" || opening.wall === "south")) opening.offset *= scale;
     corrections.push(`${axis} set to the written ${measured.label} (model estimated ${extraction[axis].toFixed(2)} m)`);
     extraction[axis] = measured.meters;
   }
+  if (corrections.length) extraction.notes = (corrections.join("; ") + ". " + extraction.notes).trim();
+  return { extraction, sources, model };
+}
+
+const DEFAULT_SETTINGS = (extraction: AiRoomExtraction): PlanBuildSettings => ({
+  width: extraction.width, depth: extraction.depth, height: extraction.height, wallThickness: 0.14, openings: true, furniture: true, lighting: "natural",
+});
+
+/** Deterministic: extraction (+ user settings) → validated scene. The AI never produces geometry directly. */
+export function assembleRoom(source: AiRoomExtraction, catalog: AiCatalogItem[], newId: () => string, settings: PlanBuildSettings = DEFAULT_SETTINGS(source), model = "engine"): AiImageResponse {
+  // Resizing the room scales the AI's positions with it, so furniture keeps its place relative to the walls.
+  const sx = settings.width / source.width;
+  const sz = settings.depth / source.depth;
   const roomId = newId();
-  const halfW = extraction.width / 2;
-  const halfD = extraction.depth / 2;
+  const halfW = settings.width / 2;
+  const halfD = settings.depth / 2;
   const furniture: FurnitureObject[] = [];
-  for (const object of extraction.objects) {
-    const entry = request.catalog.find((item) => item.id === object.catalogItemId);
-    if (!entry) continue; // Unknown types are dropped (reported via notes count below).
+  for (const object of settings.furniture ? source.objects : []) {
+    const entry = catalog.find((item) => item.id === object.catalogItemId);
+    if (!entry) continue;
     const yaw = ((Math.round(object.yawDegrees / 90) * 90) % 360 + 360) % 360;
     const rotated = yaw === 90 || yaw === 270;
     const halfX = (rotated ? entry.dimensions.depth : entry.dimensions.width) / 2;
@@ -398,34 +521,102 @@ export async function runImageToRoom(request: AiImageRequest, newId: () => strin
     furniture.push({
       id: newId(), roomId, name: object.name || entry.name, category: entry.category, catalogItemId: entry.id,
       // Clamp into the room; the spatial engine reports anything still wrong.
-      position: { x: fmt(Math.max(-halfW + halfX, Math.min(halfW - halfX, object.x))), y: entry.elevation ?? 0, z: fmt(Math.max(-halfD + halfZ, Math.min(halfD - halfZ, object.z))) },
+      position: { x: fmt(Math.max(-halfW + halfX, Math.min(halfW - halfX, object.x * sx))), y: entry.elevation ?? 0, z: fmt(Math.max(-halfD + halfZ, Math.min(halfD - halfZ, object.z * sz))) },
       yawDegrees: yaw, dimensions: entry.dimensions, color: object.color ?? entry.color,
       ...(entry.light ? { light: entry.light } : {}), ...(entry.constraints ? { constraints: entry.constraints } : {}), version: 1,
     });
   }
-  const dropped = extraction.objects.length - furniture.length;
+  const dropped = settings.furniture ? source.objects.length - furniture.length : 0;
+  const lighting = settings.lighting === "warm" ? { mode: "evening" as const, artificialLightScale: 1.2 } : settings.lighting === "neutral" ? { mode: "day" as const, artificialLightScale: 0.8 } : { mode: "day" as const, artificialLightScale: 1 };
   const scene = SceneSchema.parse({
     schemaVersion: 1,
-    id: "scene-photo-" + roomId,
-    name: extraction.roomName,
+    id: "scene-plan-" + roomId,
+    name: source.roomName,
     coordinateSystem: "y-up-xz-meters",
     rooms: [{
-      id: roomId, name: extraction.roomName, position: { x: 0, y: 0, z: 0 }, yawDegrees: 0,
-      dimensions: { width: extraction.width, depth: extraction.depth, height: extraction.height, wallThickness: 0.14 },
-      floorColor: extraction.floorColor ?? "#c8ab86", wallColor: extraction.wallColor ?? "#f1eee8",
-      openings: extraction.openings.map((opening) => {
-        const length = opening.wall === "north" || opening.wall === "south" ? extraction.width : extraction.depth;
+      id: roomId, name: source.roomName, position: { x: 0, y: 0, z: 0 }, yawDegrees: 0,
+      dimensions: { width: settings.width, depth: settings.depth, height: settings.height, wallThickness: settings.wallThickness },
+      floorColor: source.floorColor ?? "#c8ab86", wallColor: source.wallColor ?? "#f1eee8",
+      openings: (settings.openings ? source.openings : []).map((opening) => {
+        const horizontal = opening.wall === "north" || opening.wall === "south";
+        const length = horizontal ? settings.width : settings.depth;
         const width = Math.min(opening.width, length - 0.2);
+        const offset = opening.offset * (horizontal ? sx : sz);
         return {
           id: newId(), kind: opening.kind, wall: opening.wall, width,
-          offset: fmt(Math.max(-length / 2 + width / 2, Math.min(length / 2 - width / 2, opening.offset))),
-          height: opening.kind === "door" ? 2.05 : 1.3, sillHeight: opening.kind === "door" ? 0 : 0.9,
+          offset: fmt(Math.max(-length / 2 + width / 2, Math.min(length / 2 - width / 2, offset))),
+          height: opening.kind === "door" ? Math.min(2.05, settings.height - 0.2) : Math.min(1.3, settings.height - 1.1), sillHeight: opening.kind === "door" ? 0 : 0.9,
+          ...(opening.hinge ? { hinge: opening.hinge } : {}), ...(opening.swing ? { swing: opening.swing } : {}),
         };
       }),
     }],
     furniture,
+    environment: lighting,
   });
-  const read = extraction.measurements.length ? `Read from image: ${extraction.measurements.map((entry) => `${entry.label} → ${entry.meters} m (${entry.axis})`).join(", ")}. ` : "";
-  const notes = read + (corrections.length ? corrections.join("; ") + ". " : "") + extraction.notes + (dropped > 0 ? ` (${dropped} object${dropped === 1 ? "" : "s"} without a catalog match were skipped.)` : "");
-  return { scene, notes: notes.trim(), issues: validateScene(scene).issues, model };
+  const read = source.measurements.length ? `Measurements read: ${source.measurements.map((entry) => `${entry.label} → ${entry.meters} m (${entry.axis})`).join(", ")}. ` : "";
+  const notes = read + source.notes + (dropped > 0 ? ` (${dropped} object${dropped === 1 ? "" : "s"} without a catalog match were skipped.)` : "");
+  // Let the engine tidy the AI's placement: apply the best recovery candidate a few times while it helps.
+  let tidy = scene;
+  let fixedBy = 0;
+  for (let round = 0; round < 3; round += 1) {
+    const best = generateRecoveryCandidates(tidy, 1).candidates[0];
+    if (!best || best.issuesAfter >= best.issuesBefore) break;
+    tidy = applySceneAction(tidy, best.action).scene;
+    fixedBy += best.issuesBefore - best.issuesAfter;
+  }
+  const tidyNote = fixedBy > 0 ? ` Layout recovery fixed ${fixedBy} placement issue${fixedBy === 1 ? "" : "s"} automatically.` : "";
+  return { scene: tidy, notes: (notes + tidyNote).trim(), issues: validateScene(tidy).issues, model };
+}
+
+async function buildRoom(system: string, parts: Content["parts"], catalog: AiCatalogItem[], newId: () => string): Promise<AiImageResponse> {
+  const { extraction, model } = await extract(system, parts);
+  return assembleRoom(extraction, catalog, newId, undefined, model);
+}
+
+const PLAN_SYSTEM = `You read a 2D ROOM PLAN image (architectural plan, top-down layout or hand sketch) for a 3D editor and reconstruct ONE room.
+Respond with JSON only:
+{"isRoomPlan":boolean,
+ "planRooms":[{"name":string,"label":string}],
+ "roomName":string,"source":"floor-plan"|"sketch"|"photo",
+ "measurements":[{"label":string,"meters":number,"axis":"width"|"depth"|"other"}],
+ "width":number,"depth":number,"height":number,"floorColor":"#rrggbb","wallColor":"#rrggbb",
+ "openings":[{"kind":"door"|"window","wall":"north"|"south"|"east"|"west","offset":number,"width":number,"hinge":"left"|"right","swing":"in"|"out","confidence":number}],
+ "objects":[{"catalogItemId":string,"name":string,"x":number,"z":number,"yawDegrees":number,"confidence":number}],
+ "notes":string}
+STEP 1. isRoomPlan=false if the image is not a room, plan or sketch at all (then width=depth=3 and empty lists).
+STEP 2. If the image shows MORE THAN ONE room (a flat or house plan), planRooms MUST list every labelled room: name = its label text (e.g. "Bedroom", "Kitchen"), label = its size text exactly as written (e.g. 17'-8" X 17'-7"), or "" if none. For a single-room plan planRooms = [].
+STEP 3. Pick the room to reconstruct: the one named in Focus, otherwise the living room (or the largest room). roomName = its name.
+ width/depth = THAT ROOM's interior size in meters. Use its own size label (first number = left-right = width, second = up-down = depth; 1 ft = 0.3048 m, 1 in = 0.0254 m).
+ NEVER use the overall building dimensions (the long dimension lines around the whole plan) for a single room.
+ measurements = only the label(s) that belong to that room.
+STEP 4. Coordinates in meters relative to THAT room's center: x along width (left-right), z along depth (top of the image = north = -Z). yawDegrees 0 = object front faces +Z (down the image).
+ openings: doors (gap with an arc) and windows (thin double/triple lines in a wall) on that room's own walls only; offset = center along the wall from the wall midpoint; give hinge/swing when an arc is drawn.
+ objects: only furniture actually drawn inside that room, mapped to the closest catalogItemId from the provided catalog; do not invent furniture. Sizes come from the catalog.
+ confidence 0–1 per opening and object (1 = clearly drawn, 0.4 = guessed).
+height = 2.8 unless stated. In notes, say briefly what was uncertain.`;
+
+/** Parses a room-size label such as 17'-8" X 17'-7", 4.2 x 3.6 m, 3600 x 4000 mm. Returns [first, second] in meters. */
+export function parseSizeLabel(label: string): [number, number] | null {
+  const parts = label.replace(/[″“”]/g, '"').replace(/[′‘’]/g, "'").split(/\s*[x×X*]\s*/);
+  if (parts.length !== 2) return null;
+  const mm = /mm/i.test(label);
+  const cm = !mm && /cm/i.test(label);
+  const one = (text: string) => {
+    const feet = text.match(/(\d+(?:\.\d+)?)\s*'\s*-?\s*(?:(\d+(?:\.\d+)?)\s*"?)?/);
+    if (feet) return Number(feet[1]) * 0.3048 + Number(feet[2] ?? 0) * 0.0254;
+    const number = text.match(/(\d+(?:\.\d+)?)/);
+    if (!number) return NaN;
+    const value = Number(number[1]);
+    return mm ? value / 1000 : cm ? value / 100 : value;
+  };
+  const [a, b] = [one(parts[0]!), one(parts[1]!)];
+  return a >= 1 && a <= 40 && b >= 1 && b <= 40 ? [Math.round(a * 100) / 100, Math.round(b * 100) / 100] : null;
+}
+
+export async function runPlanAnalyze(request: AiPlanAnalyzeRequest): Promise<AiPlanAnalyzeResponse> {
+  const focus = request.focusRoom ? `Focus: reconstruct the room labelled "${request.focusRoom}".\n` : "";
+  return extract(PLAN_SYSTEM, [
+    { inlineData: { mimeType: request.mimeType, data: request.imageBase64 } },
+    { text: focus + "Catalog:\n" + catalogText(request.catalog) },
+  ]);
 }

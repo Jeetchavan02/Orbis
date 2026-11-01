@@ -8,7 +8,7 @@ function toLocalInput(timestamp: number) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-export function InsightsPanel() {
+export function InsightsPanel({ embedded = false }: { embedded?: boolean }) {
   const score = useWorkspaceStore((state) => state.score);
   const guidelines = useWorkspaceStore((state) => state.guidelines);
   const optimization = useWorkspaceStore((state) => state.optimization);
@@ -28,8 +28,8 @@ export function InsightsPanel() {
   };
 
   return (
-    <div className="inspector-scroll">
-      <Section title="Layout score" aside={<span className="section-hint">0–100 · measured</span>}>
+    <div className={embedded ? "room-health" : "inspector-scroll"}>
+      <Section title="Layout score" collapsible aside={<span className="section-hint">0–100 · measured</span>}>
         {score ? (
           <>
             <div className="score-hero">
@@ -70,7 +70,7 @@ export function InsightsPanel() {
         ) : null}
       </Section>
 
-      <Section title="Sunlight" aside={<span className="section-hint">approximate</span>}>
+      <Section title="Sunlight" collapsible defaultOpen={false} aside={<span className="section-hint">approximate</span>}>
         <div className="field-grid">
           <label className="field">
             <span className="field-label">Date</span>
@@ -125,7 +125,7 @@ export function InsightsPanel() {
         <NumberField label="Room north offset (bearing of the north wall)" suffix="°" step={15} min={0} max={359} value={environment.northOffsetDegrees} onCommit={(northOffsetDegrees) => updateEnvironment({ northOffsetDegrees })} />
       </Section>
 
-      <Section title="Vastu guidelines" aside={<span className="section-hint">optional · advisory</span>}>
+      <Section title="Vastu guidelines" collapsible defaultOpen={false} aside={<span className="section-hint">optional · advisory</span>}>
         <Toggle label="Evaluate Vastu guidelines" checked={rules.vastu} onChange={(vastu) => dispatch({ type: "scene.update", patch: { rules: { vastu } } }, { base: { scene: settingsVersion } })} />
         {rules.vastu && guidelines ? (
           <>

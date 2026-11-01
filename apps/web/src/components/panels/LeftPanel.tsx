@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, ImageUp, ArrowUpToLine, ChevronRight, CopyPlus, DoorOpen, LayoutGrid, Layers, Lightbulb, Lock, Paintbrush, Plus, Search } from "lucide-react";
+import { ArrowDownToLine, ImageUp, Settings, ArrowUpToLine, ChevronRight, CopyPlus, DoorOpen, LayoutGrid, Layers, Lightbulb, Lock, Paintbrush, Plus, Search } from "lucide-react";
 import { boundsDimensions, meshBounds } from "@reality-builder/shared";
 import { catalogById, type GroupId } from "../../data/catalog";
 import { importModelFile } from "../../lib/glb";
 import { activeRoom, placeEntry } from "../../lib/placement";
 import { insertFloor } from "../../lib/floors";
-import { usePhotoDialog } from "../../lib/ui";
+import { usePhotoDialog, useSettingsDialog } from "../../lib/ui";
 import { newEntityId, useWorkspaceStore } from "../../store/workspace";
 import { Library, ObjectThumb } from "./Library";
 
@@ -75,6 +75,10 @@ export function LeftPanel() {
       ))}
       <button type="button" onClick={() => { const room = activeRoom(useWorkspaceStore.getState().scene); if (room) selectEntity(room.id); }} title="Floor, wall and ceiling materials of the active room (opens in Properties)">
         <Paintbrush size={18} /><span>Materials</span>
+      </button>
+      <span className="left-rail-spacer" />
+      <button type="button" onClick={() => useSettingsDialog.getState().setOpen(true)} title="Layout rules and display options">
+        <Settings size={18} /><span>Settings</span>
       </button>
     </nav>
     <aside className="left-panel" aria-label="Scene and library">

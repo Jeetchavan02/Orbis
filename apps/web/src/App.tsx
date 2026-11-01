@@ -21,8 +21,6 @@ import {
 import { SceneViewport } from "./components/SceneViewport";
 import { FloorPlan } from "./components/FloorPlan";
 import { duplicate, Inspector } from "./components/panels/Inspector";
-import { AiPanel } from "./components/panels/AiPanel";
-import { InsightsPanel } from "./components/panels/InsightsPanel";
 import { IssuesPanel } from "./components/panels/IssuesPanel";
 import { LeftPanel } from "./components/panels/LeftPanel";
 import { dragging, LIBRARY_DRAG_TYPE } from "./components/panels/Library";
@@ -30,14 +28,15 @@ import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
 import { ConflictDialog, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
-import { RulesPanel } from "./components/panels/RulesPanel";
+import { SettingsDialog } from "./components/panels/SettingsDialog";
+import { AskAiPanel } from "./components/ai/AskAi";
 import { TopBar } from "./components/panels/TopBar";
 import { CAMERAS, TOOLS, ViewportChrome } from "./components/viewport/ViewportChrome";
 import { usePerfStore } from "./lib/perf";
 import { useContextMenu } from "./lib/ui";
 import { useWorkspaceStore } from "./store/workspace";
 
-type RightTab = "properties" | "issues" | "rules" | "insights" | "ai";
+type RightTab = "properties" | "issues";
 
 function deleteSelected() {
   const { scene, selectedEntityId, dispatch, selectEntity } = useWorkspaceStore.getState();
@@ -188,6 +187,7 @@ export default function App() {
             <div className="viewport-canvas"><SceneViewport /></div>
             {viewMode === "plan" ? <FloorPlan /> : null}
             <ViewportChrome container={viewportRef} />
+            <AskAiPanel />
             <PerfOverlay />
             {tool === "vertex" || tool === "face" ? (
               <div className="mode-banner">
@@ -250,16 +250,14 @@ export default function App() {
             <button type="button" className={rightTab === "issues" ? "active" : ""} onClick={() => setRightTab("issues")}>
               Issues {issues.length ? <span className={"tab-count tab-count--" + (errorCount ? "error" : "warning")}>{issues.length}</span> : null}
             </button>
-            <button type="button" className={rightTab === "rules" ? "active" : ""} onClick={() => setRightTab("rules")}>Rules</button>
-            <button type="button" className={rightTab === "insights" ? "active" : ""} onClick={() => setRightTab("insights")}>Insights</button>
-            <button type="button" className={rightTab === "ai" ? "active" : ""} onClick={() => setRightTab("ai")}>AI</button>
           </div>
-          {rightTab === "properties" ? <Inspector /> : rightTab === "issues" ? <IssuesPanel /> : rightTab === "rules" ? <RulesPanel /> : rightTab === "insights" ? <InsightsPanel /> : <AiPanel />}
+          {rightTab === "properties" ? <Inspector /> : <IssuesPanel />}
         </aside>
       </div>
       <ConflictDialog />
       <ShareDialog />
       <PhotoTo3DDialog />
+      <SettingsDialog />
       <OfflineDialog />
       <Notices />
     </main>

@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "reality-builder", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev:share", "--prefix", "apps"], "port": 5173 }
+  ]
+}

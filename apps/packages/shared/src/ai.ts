@@ -52,6 +52,8 @@ export const AiEditRequestSchema = z.object({
   roomId: z.string().optional(),
   scene: SceneSchema,
   catalog: z.array(AiCatalogItemSchema),
+  /** Earlier turns of this conversation (oldest first), so follow-ups like "a bit more left" have context. */
+  history: z.array(z.object({ role: z.enum(["user", "assistant"]), text: z.string().max(2000) })).max(12).default([]),
 });
 
 export const AiAttemptSchema = z.object({
@@ -82,8 +84,12 @@ export const AiRoomExtractionSchema = z.object({
     meters: z.number().positive(),
     axis: z.enum(["width", "depth", "other"]),
   })).max(20).default([]),
-  width: z.number().min(1.5).max(20),
-  depth: z.number().min(1.5).max(20),
+  /** False when the image is not a room, plan or sketch at all. */
+  isRoomPlan: z.boolean().default(true),
+  /** Every labelled room when the image is a multi-room (flat or house) plan; only one of them is reconstructed. */
+  planRooms: z.array(z.object({ name: z.string(), width: z.number().positive().optional(), depth: z.number().positive().optional(), label: z.string().optional() })).max(30).default([]),
+  width: z.number().min(1).max(40),
+  depth: z.number().min(1).max(40),
   height: z.number().min(2).max(5).default(2.7),
   floorColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   wallColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
@@ -92,7 +98,10 @@ export const AiRoomExtractionSchema = z.object({
     wall: WallSideSchema,
     offset: z.number().default(0),
     width: z.number().positive(),
-  })).max(8).default([]),
+    hinge: z.enum(["left", "right"]).optional(),
+    swing: z.enum(["in", "out"]).optional(),
+    confidence: z.number().min(0).max(1).default(0.7),
+  })).max(12).default([]),
   objects: z.array(z.object({
     catalogItemId: z.string(),
     name: z.string().optional(),
@@ -100,9 +109,18 @@ export const AiRoomExtractionSchema = z.object({
     z: z.number(),
     yawDegrees: z.number().default(0),
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    /** 0–1: how sure the model is about this piece (drawn clearly vs. inferred). */
+    confidence: z.number().min(0).max(1).default(0.7),
   })).max(40),
   notes: z.string().default(""),
 });
+
+/** "Describe a room" → generated, furnished room. */
+export const AiBriefRequestSchema = z.object({
+  brief: z.string().min(3).max(2000),
+  catalog: z.array(AiCatalogItemSchema),
+});
+export type AiBriefRequest = z.infer<typeof AiBriefRequestSchema>;
 
 export const AiImageRequestSchema = z.object({
   imageBase64: z.string().min(16),
@@ -122,6 +140,37 @@ export type AiToolCall = z.infer<typeof AiToolCallSchema>;
 export type AiPlan = z.infer<typeof AiPlanSchema>;
 export type AiEditRequest = z.infer<typeof AiEditRequestSchema>;
 export type AiEditResponse = z.infer<typeof AiEditResponseSchema>;
+/** Room-plan upload, step 1: read the image into an editable structured extraction (no scene yet). */
+export const AiPlanAnalyzeRequestSchema = AiImageRequestSchema.extend({
+  /** For a multi-room plan: which labelled room to reconstruct. */
+  focusRoom: z.string().max(80).optional(),
+});
+export const AiPlanAnalyzeResponseSchema = z.object({
+  extraction: AiRoomExtractionSchema,
+  /** Which of width/depth came from a dimension written on the image, versus estimated. */
+  sources: z.object({ width: z.enum(["written", "estimated"]), depth: z.enum(["written", "estimated"]) }),
+  model: z.string(),
+});
+
+export const PlanBuildSettingsSchema = z.object({
+  width: z.number().min(1).max(40),
+  depth: z.number().min(1).max(40),
+  height: z.number().min(2).max(6),
+  wallThickness: z.number().min(0.05).max(0.6),
+  openings: z.boolean(),
+  furniture: z.boolean(),
+  lighting: z.enum(["natural", "warm", "neutral"]),
+});
+/** Step 2: deterministic build of the scene from the (user-corrected) extraction. No AI involved. */
+export const AiPlanBuildRequestSchema = z.object({
+  extraction: AiRoomExtractionSchema,
+  settings: PlanBuildSettingsSchema,
+  catalog: z.array(AiCatalogItemSchema),
+});
+export type AiPlanAnalyzeRequest = z.infer<typeof AiPlanAnalyzeRequestSchema>;
+export type AiPlanAnalyzeResponse = z.infer<typeof AiPlanAnalyzeResponseSchema>;
+export type PlanBuildSettings = z.infer<typeof PlanBuildSettingsSchema>;
+export type AiPlanBuildRequest = z.infer<typeof AiPlanBuildRequestSchema>;
 export type AiRoomExtraction = z.infer<typeof AiRoomExtractionSchema>;
 export type AiImageRequest = z.infer<typeof AiImageRequestSchema>;
 export type AiImageResponse = z.infer<typeof AiImageResponseSchema>;
