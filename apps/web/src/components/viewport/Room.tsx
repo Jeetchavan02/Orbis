@@ -1,10 +1,27 @@
-import { memo, useMemo, useRef } from "react";
+import { Component, memo, Suspense, useMemo, useRef, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Line, Text } from "@react-three/drei";
 import { CanvasTexture, MathUtils, RepeatWrapping, SRGBColorSpace, Vector3, type Group } from "three";
 import type { Opening, Room, WallSide } from "@reality-builder/shared";
 
 const DEG = Math.PI / 180;
+
+/**
+ * 3D text fetches glyph data from a CDN. If that is slow or blocked (strict campus/venue Wi-Fi), the label must not
+ * hold the whole editor on its loading screen: it renders nothing until ready, and nothing at all if it fails.
+ */
+class LabelBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+function OptionalLabel({ children }: { children: ReactNode }) {
+  return <LabelBoundary><Suspense fallback={null}>{children}</Suspense></LabelBoundary>;
+}
 const CUTAWAY_HEIGHT = 0.18;
 
 type Segment = { from: number; to: number; bottom: number; top: number };
@@ -225,9 +242,11 @@ function DimensionLine({ length, label, position, yaw }: { length: number; label
           <meshBasicMaterial color={DIM_INK} />
         </mesh>
       ))}
-      <Text position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.16} color={DIM_INK} anchorX="center" anchorY="middle">
-        {label}
-      </Text>
+      <OptionalLabel>
+        <Text position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.16} color={DIM_INK} anchorX="center" anchorY="middle">
+          {label}
+        </Text>
+      </OptionalLabel>
     </group>
   );
 }

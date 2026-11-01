@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { openProject } from "../../lib/project";
 import { ArrowUp, Check, CircleAlert, ImagePlus, Loader2, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import {
   AiEditResponseSchema,
@@ -178,10 +179,10 @@ export function AskAiPanel() {
     const { notify } = useWorkspaceStore.getState();
     try {
       const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: turn.result.scene.name, roomType: turn.result.scene.roomType, scene: turn.result.scene }) });
-      const body = await response.json() as { id?: string; error?: string };
+      const body = await response.json() as { id?: string; ownerKey?: string; error?: string };
       if (!response.ok || !body.id) throw new Error(body.error ?? "Could not create the project.");
       update(turn.id, { opened: true });
-      window.location.href = `/?scene=${encodeURIComponent(body.id)}`;
+      openProject(body.id, body.ownerKey);
     } catch (error) {
       notify("error", (error as Error).message);
     }

@@ -20,10 +20,12 @@
     "build:server": "npm run build --workspace @reality-builder/server",
     "build:web": "npm run build --workspace @reality-builder/web",
     "build": "npm run build:packages && npm run build:server && npm run build:web",
+    "start": "node scripts/start.mjs",
     "typecheck": "npm run build:packages && npm run typecheck --workspace @reality-builder/server && npm run typecheck --workspace @reality-builder/web",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "npm run build:packages && vitest run --config vitest.config.ts",
     "dev:share": "RB_HOST=0.0.0.0 node scripts/dev.mjs",
-    "tunnel": "node scripts/tunnel.mjs"
+    "tunnel": "node scripts/tunnel.mjs",
+    "smoke:collab": "node scripts/collab-smoke.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

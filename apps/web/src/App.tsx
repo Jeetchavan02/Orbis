@@ -26,7 +26,7 @@ import { LeftPanel } from "./components/panels/LeftPanel";
 import { dragging, LIBRARY_DRAG_TYPE } from "./components/panels/Library";
 import { poseAt } from "./components/viewport/Placement";
 import { placeEntry, usePlacement } from "./lib/placement";
-import { ConflictDialog, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
+import { ConflictDialog, JoinPrompt, MissingProject, Notices, OfflineDialog, PerfOverlay, ShareDialog } from "./components/panels/Overlays";
 import { PhotoTo3DDialog } from "./components/panels/PhotoTo3D";
 import { SettingsDialog } from "./components/panels/SettingsDialog";
 import { AskAiPanel } from "./components/ai/AskAi";
@@ -63,6 +63,7 @@ export default function App() {
   const showRoutes = useWorkspaceStore((state) => state.showRoutes);
   const connection = useWorkspaceStore((state) => state.connection);
   const peers = useWorkspaceStore((state) => state.peers);
+  const wasOnline = useWorkspaceStore((state) => state.wasOnline);
   const contextMenu = useContextMenu((state) => state.menu);
   // Picking a library item shows its details in the Properties tab.
   const pickedEntry = usePlacement((state) => state.entryId);
@@ -240,7 +241,7 @@ export default function App() {
             <span className="statusbar-spacer" />
             <span>{TOOLS.find((entry) => entry.id === tool)!.label} tool</span>
             <span className="sep" />
-            <span>{connection === "online" ? `${peerCount} in session` : connection === "offline" ? "Offline (local)" : "Connecting…"}</span>
+            <span>{connection === "online" ? `${peerCount} in session` : connection === "offline" ? "Offline (local)" : connection === "missing" ? "Project not found" : wasOnline ? "Reconnecting…" : "Connecting…"}</span>
           </footer>
         </section>
 
@@ -256,6 +257,8 @@ export default function App() {
       </div>
       <ConflictDialog />
       <ShareDialog />
+      <JoinPrompt />
+      <MissingProject />
       <PhotoTo3DDialog />
       <SettingsDialog />
       <OfflineDialog />

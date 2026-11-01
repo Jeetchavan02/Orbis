@@ -99,3 +99,90 @@ describe("authoritative collaboration session", () => {
     expect(session.peers.filter((peer) => peer.clientId === "alice")).toHaveLength(1);
   });
 });
+
+describe("whole-scene replacement (load-scene)", () => {
+  const load = (scene: unknown, baseSeq: number, requestId = "load-1") => ({ type: "load-scene", requestId, baseSeq, scene });
+  const movedCopy = (x: number) => ({ ...bedroom, furniture: bedroom.furniture.map((item) => (item.id === "obj-bed" ? { ...item, position: { ...item.position, x } } : item)) });
+
+  it("applies a replacement made against the current scene and broadcasts it to everyone", () => {
+    const session = new SceneSession(bedroom);
+    const alice = client(session, "Alice");
+    const bob = client(session, "Bob");
+    session.handle(alice.handle, load(movedCopy(0.9), 0));
+    expect(session.seq).toBe(1);
+    expect(session.scene.furniture.find((item) => item.id === "obj-bed")!.position.x).toBe(0.9);
+    for (const peer of [alice, bob]) expect(peer.last()).toMatchObject({ type: "scene-replaced", seq: 1, by: "Alice" });
+  });
+
+  it("refuses a stale replacement instead of overwriting newer edits", () => {
+    const session = new SceneSession(bedroom);
+    const alice = client(session, "Alice");
+    const bob = client(session, "Bob");
+    session.handle(alice.handle, moveBed(0.3, 1, "a1")); // seq 1
+    session.handle(bob.handle, load(movedCopy(-1.2), 0, "b-load")); // Bob last synced at seq 0
+    expect(bob.last()).toMatchObject({ type: "load-rejected", requestId: "b-load", seq: 1 });
+    const rejected = bob.last();
+    if (rejected.type === "load-rejected") expect(rejected.message).toContain("Alice");
+    expect(session.seq).toBe(1);
+    expect(session.scene.furniture.find((item) => item.id === "obj-bed")!.position.x).toBe(0.3);
+    expect(alice.inbox.some((message) => message.type === "scene-replaced")).toBe(false);
+  });
+
+  it("gives replaced entities newer versions so an edit in flight against the old scene is rejected", () => {
+    const session = new SceneSession(bedroom);
+    const alice = client(session, "Alice");
+    const bob = client(session, "Bob");
+    // The imported file carries version 1 for the bed, same as the live scene.
+    session.handle(alice.handle, load(movedCopy(0.9), 0));
+    expect(session.scene.furniture.find((item) => item.id === "obj-bed")!.version).toBeGreaterThan(1);
+    session.handle(bob.handle, moveBed(-0.5, 1, "b1")); // Bob's edit was based on the old scene.
+    expect(bob.last()).toMatchObject({ type: "rejected", reason: "stale" });
+    expect(session.scene.furniture.find((item) => item.id === "obj-bed")!.position.x).toBe(0.9);
+  });
+
+  it("keeps the project's id even if the imported file came from another project", () => {
+    const session = new SceneSession({ ...bedroom, id: "project-a" });
+    const alice = client(session, "Alice");
+    session.handle(alice.handle, load({ ...bedroom, id: "some-other-project" }, 0));
+    expect(session.scene.id).toBe("project-a");
+  });
+
+  it("rejects a malformed load-scene without touching the scene", () => {
+    const session = new SceneSession(bedroom);
+    const alice = client(session, "Alice");
+    session.handle(alice.handle, { type: "load-scene", requestId: "x", scene: bedroom }); // no baseSeq
+    expect(alice.last().type).toBe("error");
+    expect(session.seq).toBe(0);
+  });
+});
+
+describe("open-link joining", () => {
+  it("a guest who joins later receives the current scene and sequence, then edits normally", () => {
+    const session = new SceneSession(bedroom);
+    const owner = client(session, "Owner");
+    session.handle(owner.handle, moveBed(0.4, 1, "o1"));
+    const guest = client(session, "Guest");
+    const welcome = guest.inbox.find((message) => message.type === "welcome");
+    expect(welcome).toMatchObject({ seq: 1 });
+    if (welcome?.type !== "welcome") return;
+    const bed = welcome.scene.furniture.find((item) => item.id === "obj-bed")!;
+    expect(bed.position.x).toBe(0.4);
+    session.handle(guest.handle, moveBed(-0.4, bed.version, "g1"));
+    expect(owner.last()).toMatchObject({ type: "applied", requestId: "g1", clientName: "Guest", seq: 2 });
+  });
+
+  it("closeAll tells every client the project is gone and disconnects them", () => {
+    const session = new SceneSession(bedroom);
+    let closed = 0;
+    const inbox: ServerMessage[] = [];
+    for (const name of ["A", "B"]) {
+      const handle = { send: (message: ServerMessage) => inbox.push(message), close: () => (closed += 1) };
+      session.connect(handle);
+      session.handle(handle, { type: "hello", sceneId: "t", clientId: name, name, color: "#123456" });
+    }
+    session.closeAll({ type: "project-deleted" });
+    expect(closed).toBe(2);
+    expect(inbox.filter((message) => message.type === "project-deleted")).toHaveLength(2);
+    expect(session.size).toBe(0);
+  });
+});

@@ -103,7 +103,18 @@ export class SceneSession {
       }
       case "load-scene": {
         if (!client.peer) return;
-        this.scene = message.scene;
+        if (message.baseSeq !== this.seq) {
+          // Someone changed the scene after this client last synced: never let an older snapshot win silently.
+          const by = [...new Set(this.lastChangedBy.values())].filter((name) => name !== client.peer!.name);
+          handle.send({
+            type: "load-rejected",
+            requestId: message.requestId,
+            seq: this.seq,
+            message: `The scene changed${by.length ? " (" + by.slice(0, 3).join(", ") + ")" : ""} since you last synced, so your version was not applied. Nothing was overwritten.`,
+          });
+          return;
+        }
+        this.scene = supersede(this.scene, message.scene);
         this.seq += 1;
         this.lastChangedBy.clear();
         this.dirty = true;
@@ -176,6 +187,19 @@ export class SceneSession {
     this.onChange(this, false);
   }
 
+  /** Disconnects everyone (e.g. the project was deleted). */
+  closeAll(message: ServerMessage) {
+    for (const client of this.clients.values()) {
+      client.handle.send(message);
+      client.handle.close?.();
+    }
+    this.clients.clear();
+  }
+
+  get size() {
+    return this.clients.size;
+  }
+
   broadcast(message: ServerMessage) {
     for (const client of this.clients.values()) if (client.peer) client.handle.send(message);
   }
@@ -183,4 +207,22 @@ export class SceneSession {
   private broadcastPeers() {
     this.broadcast({ type: "peers", peers: this.peers });
   }
+}
+
+/**
+ * A replacement scene gets entity versions strictly above anything the old scene had, so an edit that was in
+ * flight against the old scene is always rejected as stale instead of landing on a same-id object by accident.
+ */
+export function supersede(previous: Scene, next: Scene): Scene {
+  const old = new Map<string, number>();
+  for (const item of previous.furniture) old.set(item.id, item.version);
+  for (const room of previous.rooms) old.set(room.id, room.version);
+  const bump = (id: string, version: number) => Math.max(version, old.get(id) ?? 0) + 1;
+  return {
+    ...next,
+    id: previous.id,
+    settingsVersion: Math.max(next.settingsVersion, previous.settingsVersion) + 1,
+    furniture: next.furniture.map((item) => ({ ...item, version: bump(item.id, item.version) })),
+    rooms: next.rooms.map((room) => ({ ...room, version: bump(room.id, room.version) })),
+  };
 }

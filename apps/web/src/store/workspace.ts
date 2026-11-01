@@ -17,7 +17,8 @@ import {
 } from "@reality-builder/shared";
 import type { GuidelineReport, LayoutScore, OptimizationResult, RecoveryCandidate, RecoveryResult, SunStudy, ValidationResult } from "@reality-builder/spatial-engine";
 import { starterScene } from "../data/scene";
-import { CollabClient, saveProfile, sessionIdentity, type ConnectionState } from "../lib/collab";
+import { CollabClient, saveProfile, sessionIdentity, uuid, type ConnectionState } from "../lib/collab";
+import { currentProjectId, forgetProject, rememberProject } from "../lib/project";
 import type { WorkerRequest, WorkerResponse } from "../workers/spatial.worker";
 
 export type ViewMode = "perspective" | "top" | "front" | "side" | "iso" | "walk" | "plan";
@@ -37,7 +38,8 @@ export type ConflictState = {
   pending: Pending;
 };
 
-export type OfflineConflict = { localScene: Scene; serverScene: Scene; edits: number };
+/** `serverSeq` is the server sequence the dialog was opened at; "keep mine" is refused if the scene moved on since. */
+export type OfflineConflict = { localScene: Scene; serverScene: Scene; edits: number; serverSeq: number };
 
 export type Notice = { id: number; tone: "info" | "error" | "success"; text: string };
 
@@ -63,6 +65,8 @@ type WorkspaceStore = {
   focusSignal: number;
 
   connection: ConnectionState;
+  /** True once this tab has been connected at least once (so "connecting" can be shown as "reconnecting"). */
+  wasOnline: boolean;
   selfId: string;
   peers: Peer[];
   conflict: ConflictState | null;
@@ -144,6 +148,7 @@ function pick(versions: Record<string, number>, action: SceneAction) {
 
 const identity = sessionIdentity();
 const OFFLINE_KEY = "rb.offline-scene";
+const JOIN_NOTICE_DELAY_MS = 4000;
 
 /** Offline edits survive a reload of this tab until they are reconciled with the server. */
 function loadOfflineWork(): { scene: Scene; edits: number } | null {
@@ -166,7 +171,7 @@ function storeOfflineWork(scene: Scene, edits: number) {
   }
 }
 const restoredOfflineWork = loadOfflineWork();
-const sceneId = new URLSearchParams(location.search).get("scene") ?? "default";
+const sceneId = currentProjectId() ?? "default";
 
 /** Uploads a small viewport capture as the project card thumbnail (best effort). */
 export function uploadThumbnail() {
@@ -179,6 +184,16 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
   const pending = new Map<string, Pending>();
   /** Last server sequence number applied; a gap means a missed message → resynchronize. */
   let lastSeq = -1;
+  /** A whole-scene replacement waiting for the server's verdict (import, or offline "keep mine"). */
+  /** Collaborators announced in the last couple of minutes (a rename right after joining is reported once). */
+  const recentJoins = new Map<string, number>();
+  let pendingLoad: { requestId: string; kind: "import" | "offline"; scene: Scene; edits: number; reason: string } | null = null;
+  const requestLoad = (kind: "import" | "offline", scene: Scene, baseSeq: number, edits: number, reason: string) => {
+    const requestId = identity.clientId.slice(0, 8) + "-load-" + ++requestCounter;
+    if (!client.send({ type: "load-scene", requestId, baseSeq, scene })) return false;
+    pendingLoad = { requestId, kind, scene, edits, reason };
+    return true;
+  };
 
   const apply = (scene: Scene, action: SceneAction) => applySceneAction(scene, action);
 
@@ -235,13 +250,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         const { offlineEdits, scene: localScene } = get();
         pending.clear();
         lastSeq = message.seq;
+        pendingLoad = null;
+        rememberProject(sceneId);
         if (offlineEdits > 0) {
           // Never silently drop offline work: ask which version wins.
-          set({ selfId: message.selfId, peers: message.peers, offlineConflict: { localScene, serverScene: message.scene, edits: offlineEdits } });
+          set({ selfId: message.selfId, peers: message.peers, wasOnline: true, offlineConflict: { localScene, serverScene: message.scene, edits: offlineEdits, serverSeq: message.seq } });
           return;
         }
-        lastSeq = message.seq;
-        set({ scene: message.scene, selfId: message.selfId, peers: message.peers, saveStatus: { state: "saved", savedAt: null, path: null } });
+        set({ scene: message.scene, selfId: message.selfId, peers: message.peers, wasOnline: true, saveStatus: { state: "saved", savedAt: null, path: null } });
         return;
       }
       case "applied": {
@@ -286,8 +302,57 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         }
         return;
       }
-      case "peers":
+      case "peers": {
+        // Join / leave notices for other collaborators (by client id, so renames aren't reported as joins).
+        const before = new Map(get().peers.map((peer) => [peer.clientId, peer.name]));
+        const after = new Map(message.peers.map((peer) => [peer.clientId, peer.name]));
+        const self = get().selfId;
+        // Someone who just joined and then picked a name in the join prompt: say so, once.
+        for (const [id, name] of after) {
+          const previous = before.get(id);
+          const joinedAt = recentJoins.get(id);
+          if (id !== self && previous && previous !== name && joinedAt && Date.now() - joinedAt < 120_000) {
+            recentJoins.delete(id);
+            notify("info", `${previous} is now ${name}`);
+          }
+        }
+        if (before.size > 0) {
+          // Announced after a short delay so the name is the one they pick in the join prompt, not the guest default.
+          for (const id of after.keys()) {
+            if (id === self || before.has(id)) continue;
+            window.setTimeout(() => {
+              const peer = get().peers.find((entry) => entry.clientId === id);
+              if (!peer) return;
+              notify("info", `${peer.name} joined`);
+              recentJoins.set(id, Date.now());
+            }, JOIN_NOTICE_DELAY_MS);
+          }
+          for (const [id, name] of before) if (id !== self && !after.has(id)) notify("info", `${name} left`);
+        }
         set({ peers: message.peers });
+        return;
+      }
+      case "load-rejected": {
+        if (!pendingLoad || pendingLoad.requestId !== message.requestId) return;
+        const rejected = pendingLoad;
+        pendingLoad = null;
+        if (rejected.kind === "offline") {
+          // Someone edited while the dialog was open: keep the offline work and ask again against the newest scene.
+          set({ offlineEdits: rejected.edits });
+          storeOfflineWork(rejected.scene, rejected.edits);
+          notify("error", message.message + " Choose again with the latest version.");
+          lastSeq = -1;
+          client.close();
+          client.connect();
+        } else {
+          notify("error", message.message + " Try opening the file again.");
+        }
+        return;
+      }
+      case "project-deleted":
+        notify("error", "This project was deleted by its owner.");
+        forgetProject(sceneId);
+        set({ connection: "missing" });
         return;
       case "saved":
         set({ saveStatus: { state: "saved", savedAt: message.savedAt, path: message.path } });
@@ -301,7 +366,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
           storeOfflineWork(message.scene, 0);
         }
         set({ scene: message.scene, history: { past: [], future: [] }, selectedEntityId: "", recovery: { status: "idle", result: null, previewId: null } });
-        if (message.by !== identity.name) notify("info", `${message.by} loaded a different scene.`);
+        if (pendingLoad) {
+          notify("success", pendingLoad.reason);
+          pendingLoad = null;
+        } else if (message.by !== identity.name) notify("info", `${message.by} replaced the scene.`);
         return;
       }
       case "error":
@@ -329,13 +397,22 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
   const client = new CollabClient(sceneId, identity, {
     onMessage: handleMessage,
     onState: (connection) => {
+      if (get().connection === "missing") return; // Deleted / unknown project: stay on the "not found" screen.
       set({ connection });
       if (connection === "offline") {
         // In-flight requests may or may not have been applied; the next welcome is authoritative.
         pending.clear();
+        if (pendingLoad?.kind === "offline") {
+          // The verdict never arrived: keep the offline work so the next welcome asks again.
+          set({ offlineEdits: pendingLoad.edits });
+          storeOfflineWork(pendingLoad.scene, pendingLoad.edits);
+        }
+        pendingLoad = null;
       }
     },
   });
+  // Back on the network (Wi-Fi switch, laptop wake): reconnect now instead of waiting out the backoff.
+  window.addEventListener("online", () => client.reconnectNow());
 
   // ---- Spatial worker: validation runs off the main thread on every scene change.
   const worker = new Worker(new URL("../workers/spatial.worker.ts", import.meta.url), { type: "module" });
@@ -410,6 +487,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
     resetCameraSignal: 0,
     focusSignal: 0,
     connection: "connecting",
+    wasOnline: false,
     selfId: "",
     peers: [],
     conflict: null,
@@ -462,10 +540,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
         return;
       }
       const scene = parsed.data;
-      if (get().connection === "online" && client.send({ type: "load-scene", scene })) {
-        notify("success", reason);
-        return;
-      }
+      if (get().connection === "online" && requestLoad("import", scene, lastSeq, 0, reason)) return;
       set({ scene, history: { past: [], future: [] }, selectedEntityId: "", offlineEdits: get().offlineEdits + 1, saveStatus: { state: "local", savedAt: null, path: null } });
       storeOfflineWork(scene, get().offlineEdits);
       notify("success", reason + " (local only)");
@@ -502,7 +577,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => {
       set({ offlineConflict: null, offlineEdits: 0, history: { past: [], future: [] } });
       storeOfflineWork(offline.localScene, 0);
       if (choice === "mine") {
-        client.send({ type: "load-scene", scene: offline.localScene });
+        if (!requestLoad("offline", offline.localScene, offline.serverSeq, offline.edits, "Your offline version is now the shared scene.")) {
+          set({ offlineEdits: offline.edits });
+          storeOfflineWork(offline.localScene, offline.edits);
+          notify("error", "Not connected. Your offline edits are kept; you'll be asked again on reconnect.");
+        }
       } else {
         // Re-sync from the live server state rather than the snapshot taken when the dialog opened.
         lastSeq = -1;
@@ -637,7 +716,7 @@ export function downloadScene(scene: Scene) {
 }
 
 export function newEntityId(prefix: string) {
-  return prefix + "-" + crypto.randomUUID().slice(0, 8);
+  return prefix + "-" + uuid().slice(0, 8);
 }
 
 export const currentIdentity = identity;

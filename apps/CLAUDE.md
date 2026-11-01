@@ -72,7 +72,7 @@ Verified in the browser (two tabs) and by `npm test` (35 tests), `npm run typech
 **Req 1 — Editor** [x] library (search, click/drag-drop, free-spot placement) · [x] select/move/rotate/resize gizmos · [x] duplicate/delete · [x] inspector (transform, size, colour, constraints, lights) · [x] room size, surfaces, doors/windows · [x] orbit/pan/zoom, frame (F), reset (H) · [x] context menu, quick bar, shortcuts · [x] designed bedroom demo (validates clean)
 **Req 2 — Mesh** [x] convert to editable mesh · [x] vertex move (coincident verts move together) · [x] face extrusion (real verts/tris, outward walls) · [x] GLB/GLTF import → canonical mesh · [x] bounds/colliders/validation/undo update · [ ] multi-vertex selection
 **Req 3 — Validation** [x] RBush broad phase + SAT · [x] boundaries (+ceiling) · [x] front clearance (binary-searched free depth) · [x] door swing · [x] pathways (flood fill, blocker analysis, A* routes) · [x] structured issues + highlights + rules panel
-**Req 4 — Collaboration** [x] authoritative server, per-entity versions, base captured at edit start · [x] stale rejection + Keep mine/Take theirs · [x] presence + live selection tags · [x] auto-reconnect · [x] offline edits persisted per tab and reconciled explicitly
+**Req 4 — Collaboration** [x] open share links `/project/<id>` + production server (see README → Deploy) · [x] authoritative server, per-entity versions, base captured at edit start · [x] stale rejection + Keep mine/Take theirs · [x] presence + live selection tags · [x] auto-reconnect · [x] offline edits persisted per tab and reconciled explicitly
 **Req 5 — Recovery** [x] causal-priority search, prefilter + full revalidation, no new issues allowed, locked objects respected, 3 strategies, ghost preview, one-step batch apply
 **Req 6 — Performance** [x] 500/1000-object stress scenes · [x] worker validation · [x] live overlay (measured: FPS, draw calls, validation ms, naive/broad/narrow pairs) · [x] low-detail rendering >150 objects · [x] memoized items · [x] BVH raycast for big meshes. Measured: 500 objects → 60 FPS, 17 broad-phase pairs of 124,750, ~10–50 ms validation in worker.
 **Req 7 — History/persistence** [x] inverse-action stack for every action type · [x] autosave + save to `server/data/scenes` · [x] export/open JSON (schema-validated) · [x] restore verified across server restart
@@ -98,7 +98,15 @@ Verified in the browser (two tabs) and by `npm test` (35 tests), `npm run typech
 - `applySceneAction(scene, action)` → `{ scene, inverse }`: pure, never mutates, throws `SceneActionError`. Spatial validity is never checked there.
 - UI mutates only via `useWorkspaceStore().dispatch(action, { base })`. Online clients are non-optimistic (apply on server echo).
 - Mesh is authoritative for bounds (create/update derive `dimensions`). Mesh edits re-anchor bottom-center and shift position so the geometry stays in place.
-- Server reads `API_PORT` (default 3001), not `PORT`. Browser preview config: `../.claude/launch.json`.
+- Locally the server reads `API_PORT` (default 3001). In production (`npm start` → `scripts/start.mjs`, NODE_ENV=production) it reads `PORT`, binds 0.0.0.0, serves `web/dist`, and stores data in `RB_DATA_DIR`. Browser preview config: `../.claude/launch.json`.
+- Project URLs are `/project/<id>` (`web/src/lib/project.ts`); legacy `?scene=<id>` still works. Never use `crypto.randomUUID` directly in the web app (undefined on plain-HTTP LAN addresses); use `uuid()` from `lib/collab.ts`.
+
+## Collaboration over the internet (2026-11-01)
+- Root cause of cross-laptop failure: server bound to 127.0.0.1 and only reachable through the Vite dev proxy; no production server for the web app; share links were localhost or LAN IPs; editor also crashed on plain-HTTP LAN addresses (`crypto.randomUUID`).
+- Fix: single-process production server (`npm run build && npm start`), Railway config in `railway.json`, `/project/<id>` links, open-link editing with a first-visit name prompt, public mode (`RB_PUBLIC`): homepage lists only ids this browser knows (`rb.projects` in localStorage), unknown links close with 4004 → "not available" screen, delete needs the owner key returned at creation (stored hashed in `RB_DATA_DIR/owners.json`).
+- `load-scene` now carries `baseSeq`; the server answers `load-rejected` if the scene moved on, and `supersede()` bumps every entity version past the old scene's so in-flight edits are rejected as stale.
+- WebSocket heartbeat (25 s ping, terminate dead sockets), reconnect with jittered backoff and immediately on the browser `online` event, join/leave notices.
+- Verified: `npm test` (58), `npm run smoke:collab` against the production build, and a two-browser-profile Playwright run of the 20-step acceptance flow. Not yet verified on a real deployment or two physical networks.
 
 ## Decisions log
 

@@ -1,9 +1,11 @@
-import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Copy, Globe2, Info, Laptop, Link2, X } from "lucide-react";
 import type { FurnitureObject, Room } from "@reality-builder/shared";
 import { usePerfStore } from "../../lib/perf";
 import { useEffect, useState } from "react";
 import { currentIdentity, useWorkspaceStore } from "../../store/workspace";
 import { useShareDialog } from "../../lib/ui";
+import { saveDefaultProfile } from "../../lib/collab";
+import { currentProjectId, projectUrl } from "../../lib/project";
 
 /** Live measurements only: FPS/draw calls from the render loop, the rest from the last validation run. */
 export function PerfOverlay() {
@@ -133,17 +135,17 @@ export function ShareDialog() {
   }, [open]);
   if (!open) return null;
 
-  const sceneId = new URLSearchParams(location.search).get("scene") ?? "default";
-  const query = `?scene=${encodeURIComponent(sceneId)}`;
+  const sceneId = currentProjectId() ?? "default";
+  const link = projectUrl(sceneId);
   const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
-  const links = [`${location.origin}/${query}`, ...(loopback ? addresses.map((address) => `${location.protocol}//${address}:${location.port}/${query}`) : [])];
-  const copy = async (link: string) => {
+  const lanLinks = loopback ? addresses.map((address) => `${location.protocol}//${address}:${location.port}/project/${encodeURIComponent(sceneId)}`) : [];
+  const copy = async (value: string) => {
     try {
-      await navigator.clipboard.writeText(link);
-      setCopied(link);
-      window.setTimeout(() => setCopied(null), 1500);
+      await navigator.clipboard.writeText(value);
+      setCopied(value);
+      window.setTimeout(() => setCopied(null), 1600);
     } catch {
-      useWorkspaceStore.getState().notify("error", "Copy failed — select the link and copy it manually.");
+      useWorkspaceStore.getState().notify("error", "Copy failed. Select the link and copy it manually.");
     }
   };
 
@@ -151,20 +153,34 @@ export function ShareDialog() {
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="share-title" onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
       <div className="modal share-modal">
         <header className="share-head">
-          <h2 id="share-title">Collaborate on “{scene.name}”</h2>
+          <h2 id="share-title">Share “{scene.name}”</h2>
           <button type="button" className="icon-button" aria-label="Close" onClick={() => setOpen(false)}><X size={16} /></button>
         </header>
-        <p className="field-note">Everyone with the link edits the same scene live. Edits are version-checked: if two people change the same object, nobody is silently overwritten.</p>
-        <div className="share-links">
-          {links.map((link, index) => (
-            <div key={link} className="share-link">
-              <span className="share-link-label">{index === 0 ? (loopback ? "This computer" : "Link") : "Same Wi-Fi / network"}</span>
-              <input readOnly value={link} onFocus={(event) => event.currentTarget.select()} aria-label="Share link" />
-              <button type="button" className="ghost-button" onClick={() => void copy(link)}>{copied === link ? "Copied" : "Copy"}</button>
-            </div>
-          ))}
+        <div className={"share-access" + (loopback ? " share-access--local" : "")}>
+          <span className="share-access-icon">{loopback ? <Laptop size={16} /> : <Globe2 size={16} />}</span>
+          <span>
+            <strong>{loopback ? "Only this computer can open this link" : "Anyone with the link can edit"}</strong>
+            <span>{loopback
+              ? "You're running Reality Builder locally. Use the deployed site to share over the internet."
+              : "No sign-up needed. Everyone who opens it joins this live scene, and conflicting edits are never silently overwritten."}</span>
+          </span>
         </div>
-        {loopback ? <p className="field-note">For other devices, start the app with <code>npm run dev:share</code> so it accepts network connections, then send them a “Same Wi-Fi” link.</p> : null}
+        <div className="share-primary">
+          <span className="share-url"><Link2 size={14} /><input readOnly value={link} onFocus={(event) => event.currentTarget.select()} aria-label="Project link" /></span>
+          <button type="button" className="primary-button" onClick={() => void copy(link)}>{copied === link ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy link</>}</button>
+        </div>
+        {lanLinks.length ? (
+          <details className="share-lan">
+            <summary>Same Wi-Fi links</summary>
+            <p className="field-note">Work only for devices on your network, and only when started with <code>npm run dev:share</code>.</p>
+            {lanLinks.map((lan) => (
+              <div key={lan} className="share-link">
+                <input readOnly value={lan} onFocus={(event) => event.currentTarget.select()} aria-label="Same network link" />
+                <button type="button" className="ghost-button" onClick={() => void copy(lan)}>{copied === lan ? "Copied" : "Copy"}</button>
+              </div>
+            ))}
+          </details>
+        ) : null}
         <div className="share-section-title">You appear as</div>
         <div className="share-identity">
           <input className="share-name" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} aria-label="Your display name" />
@@ -184,6 +200,59 @@ export function ShareDialog() {
           ))}
         </ul>
       </div>
+    </div>
+  );
+}
+
+/** Shown when a link points to a project that doesn't exist (typo) or was deleted while open. */
+export function MissingProject() {
+  const connection = useWorkspaceStore((state) => state.connection);
+  if (connection !== "missing") return null;
+  return (
+    <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="missing-title">
+      <div className="modal join-modal">
+        <h2 id="missing-title">This project isn't available</h2>
+        <p className="field-note">The link may be mistyped, or the project was deleted by the person who created it. Ask them for a fresh link.</p>
+        <div className="join-actions"><button type="button" className="primary-button" onClick={() => location.assign("/")}>Go to my projects</button></div>
+      </div>
+    </div>
+  );
+}
+
+const PROFILE_SET = "rb.profile";
+
+/** First visit in this browser: pick the name collaborators will see. Never blocks editing (Skip keeps the guest name). */
+export function JoinPrompt() {
+  const connection = useWorkspaceStore((state) => state.connection);
+  const scene = useWorkspaceStore((state) => state.scene);
+  const peers = useWorkspaceStore((state) => state.peers);
+  const [open, setOpen] = useState(() => {
+    try {
+      return !localStorage.getItem(PROFILE_SET);
+    } catch {
+      return false;
+    }
+  });
+  const [name, setName] = useState(currentIdentity.name);
+  if (!open || connection !== "online") return null;
+  const finish = (save: boolean) => {
+    const value = name.trim().slice(0, 40) || currentIdentity.name;
+    saveDefaultProfile(save ? value : currentIdentity.name, currentIdentity.color);
+    if (save && value !== currentIdentity.name) useWorkspaceStore.getState().rename(value, currentIdentity.color);
+    setOpen(false);
+  };
+  const others = peers.filter((peer) => peer.name !== currentIdentity.name);
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="join-title">
+      <form className="modal join-modal" onSubmit={(event) => { event.preventDefault(); finish(true); }}>
+        <h2 id="join-title">Join “{scene.name}”</h2>
+        <p className="field-note">{others.length ? `${others.map((peer) => peer.name).slice(0, 3).join(", ")}${others.length > 3 ? " and others are" : others.length > 1 ? " are" : " is"} here. ` : ""}Pick the name others will see next to your edits.</p>
+        <input className="share-name join-name" autoFocus value={name} maxLength={40} onChange={(event) => setName(event.target.value)} aria-label="Your display name" />
+        <div className="join-actions">
+          <button type="button" className="ghost-button" onClick={() => finish(false)}>Skip</button>
+          <button type="submit" className="primary-button" disabled={!name.trim()}>Start editing</button>
+        </div>
+      </form>
     </div>
   );
 }

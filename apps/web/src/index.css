@@ -419,6 +419,27 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .view-toggle button { white-space: nowrap; }
 .peer-cursor { padding: 2px 7px; border-radius: 10px; color: #fff; font: 600 11px Inter, system-ui, sans-serif; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 6px rgb(0 0 0 / 20%); }
 .share-modal { width: min(560px, 100%); }
+.share-access { display: flex; gap: 10px; align-items: flex-start; margin: 14px 0 12px; padding: 10px 12px; border: 1px solid #cfe5da; border-radius: 9px; background: var(--accent-soft); }
+.share-access--local { border-color: var(--line-strong); background: var(--surface-2); }
+.share-access-icon { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 8px; background: #fff; color: var(--accent-strong); }
+.share-access--local .share-access-icon { color: var(--ink-2); }
+.share-access > span:last-child { display: grid; gap: 2px; }
+.share-access strong { font-size: 13px; }
+.share-access > span:last-child > span { color: var(--ink-2); font-size: 12px; line-height: 1.4; }
+.share-primary { display: flex; gap: 8px; align-items: center; }
+.share-url { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--muted); }
+.share-url input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.share-primary .primary-button { height: 34px; min-width: 112px; }
+.share-lan { margin-top: 10px; }
+.share-lan summary { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.share-lan .share-link { margin-top: 6px; }
+.join-modal { display: grid; gap: 10px; }
+.join-modal h2 { margin: 0; }
+.join-modal .field-note { margin: 0; }
+.join-name { height: 36px !important; font-size: 13px !important; }
+.join-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.connection--missing { background: #fbeaea; color: #a63a3a; }
+@media (max-width: 520px) { .share-primary { flex-direction: column; align-items: stretch; } }
 .share-head { display: flex; align-items: center; justify-content: space-between; }
 .share-head h2 { margin: 0; }
 .share-links { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }

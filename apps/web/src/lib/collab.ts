@@ -1,6 +1,20 @@
 import { ServerMessageSchema, type ClientMessage, type ServerMessage } from "@reality-builder/shared";
 
-export type ConnectionState = "connecting" | "online" | "offline";
+/** "missing": the server says this project doesn't exist (bad link or deleted); no reconnect is attempted. */
+/**
+ * crypto.randomUUID only exists in secure contexts (HTTPS or localhost). Over plain http://<LAN-IP> it is undefined,
+ * which used to crash the editor on "same Wi-Fi" links, so fall back to getRandomValues (available everywhere).
+ */
+export function uuid(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export type ConnectionState = "connecting" | "online" | "offline" | "missing";
 
 type Handlers = {
   onMessage: (message: ServerMessage) => void;
@@ -45,7 +59,7 @@ export function sessionIdentity() {
       // Not persisted; a reload will produce a new name.
     }
   }
-  return { clientId: crypto.randomUUID(), ...profile };
+  return { clientId: uuid(), ...profile };
 }
 
 /** Default profile for the homepage greeting and new tabs. */
@@ -120,16 +134,31 @@ export class CollabClient {
     socket.addEventListener("close", (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
+      if (event.code === 4004) {
+        this.handlers.onState("missing");
+        return;
+      }
       this.handlers.onState("offline");
-      // 4000 = replaced by a newer connection from this same tab; reconnecting would fight it.
+      // 4000 = replaced by a newer connection from this same tab (or the project was deleted); reconnecting would fight it.
       if (!this.closed && event.code !== 4000) this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect() {
-    const delay = Math.min(10_000, 500 * 2 ** this.retry);
+    if (this.timer !== null) window.clearTimeout(this.timer);
+    // Exponential backoff with jitter so many clients don't hammer a restarting server in lockstep.
+    const delay = Math.min(10_000, 500 * 2 ** this.retry) * (0.8 + Math.random() * 0.4);
     this.retry += 1;
     this.timer = window.setTimeout(() => this.connect(), delay);
+  }
+
+  /** Skips the backoff wait (e.g. the browser just came back online). */
+  reconnectNow() {
+    if (this.closed || this.socket) return;
+    if (this.timer !== null) window.clearTimeout(this.timer);
+    this.timer = null;
+    this.retry = 0;
+    this.connect();
   }
 
   /** Returns false when not connected; callers then fall back to local-only editing. */

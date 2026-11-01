@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { AiBriefRequestSchema, AiEditRequestSchema, AiImageRequestSchema, AiPlanAnalyzeRequestSchema, AiPlanBuildRequestSchema, ApiHealthSchema, SceneSchema, type Scene, type ServerMessage } from "@reality-builder/shared";
@@ -16,11 +16,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 for (const file of [resolve(here, "../.env"), resolve(here, "../../.env")]) {
   if (existsSync(file)) process.loadEnvFile(file);
 }
-const DATA_DIR = resolve(here, "../data/scenes");
+/** Production = the deployed single-service build (serves the web app, listens publicly, private project list). */
+const PRODUCTION = process.env.NODE_ENV === "production";
+/** Where projects live. On a host with a persistent volume, point this at the volume (e.g. RB_DATA_DIR=/data). */
+const DATA_ROOT = process.env.RB_DATA_DIR ? resolve(process.env.RB_DATA_DIR) : resolve(here, "../data");
+/**
+ * Public mode: the server is reachable by anyone on the internet. The homepage then only lists projects a browser
+ * created or opened (by id), share links to unknown projects 404 instead of creating one, and deleting needs the
+ * owner key. Defaults to on in production; RB_PUBLIC=1/0 overrides.
+ */
+const PUBLIC = process.env.RB_PUBLIC ? process.env.RB_PUBLIC === "1" : PRODUCTION;
+const WEB_DIST = resolve(here, "../../web/dist");
+const DATA_DIR = resolve(DATA_ROOT, "scenes");
 const DEFAULT_FIXTURE = resolve(here, "../../fixtures/bedroom-scene.json");
 const SCENE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const AUTOSAVE_DELAY_MS = 1500;
-const THUMB_DIR = resolve(here, "../data/thumbnails");
+const THUMB_DIR = resolve(DATA_ROOT, "thumbnails");
+const OWNERS_FILE = resolve(DATA_ROOT, "owners.json");
 const FIXTURES = resolve(here, "../../fixtures");
 /** Starting points offered by the homepage; each validates cleanly with the spatial engine. */
 const TEMPLATE_FILES: Record<string, string> = {
@@ -56,6 +68,9 @@ async function loadInitialScene(id: string): Promise<Scene> {
 }
 
 async function persist(id: string, session: SceneSession) {
+  // A deleted project's last autosave must not bring its file back.
+  const live = sessions.get(id);
+  if (!live || (await live) !== session) return;
   await mkdir(DATA_DIR, { recursive: true });
   const target = scenePath(id);
   const temp = target + ".tmp";
@@ -64,7 +79,7 @@ async function persist(id: string, session: SceneSession) {
   session.dirty = false;
   const savedAt = new Date().toISOString();
   lastSaved.set(id, savedAt);
-  session.broadcast({ type: "saved", savedAt, path: "server/data/scenes/" + id + ".json" });
+  session.broadcast({ type: "saved", savedAt, path: PRODUCTION ? "server" : "server/data/scenes/" + id + ".json" });
 }
 
 function scheduleSave(id: string, session: SceneSession, immediate = false) {
@@ -105,14 +120,51 @@ async function currentScene(id: string): Promise<Scene | null> {
   }
 }
 
+// ---------- Owner keys: whoever created a project gets a secret that is required to delete it ----------
+const hashKey = (key: string) => createHash("sha256").update(key).digest("hex");
+let owners: Record<string, string> | null = null;
+async function loadOwners() {
+  if (owners) return owners;
+  try {
+    owners = JSON.parse(await readFile(OWNERS_FILE, "utf8")) as Record<string, string>;
+  } catch {
+    owners = {};
+  }
+  return owners;
+}
+async function setOwner(id: string, key: string | null) {
+  const map = await loadOwners();
+  if (key) map[id] = hashKey(key);
+  else delete map[id];
+  await mkdir(DATA_ROOT, { recursive: true });
+  await writeFile(OWNERS_FILE + ".tmp", JSON.stringify(map, null, 2));
+  await rename(OWNERS_FILE + ".tmp", OWNERS_FILE);
+}
+/** Creates the owner key for a new project and returns it (only the hash is stored). */
+async function claim(id: string) {
+  const key = randomUUID();
+  await setOwner(id, key);
+  return key;
+}
+async function isOwner(id: string, key: string | undefined) {
+  const hash = (await loadOwners())[id];
+  if (!hash) return !PUBLIC; // Projects made before owner keys existed: deletable locally, never on the public server.
+  return !!key && hashKey(key) === hash;
+}
+
+const sceneExists = (id: string) => sessions.has(id) || existsSync(scenePath(id));
+
 async function writeProject(scene: Scene) {
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(scenePath(scene.id), JSON.stringify(scene, null, 2));
 }
 
-app.get("/api/projects", async (_request, response) => {
+app.get("/api/projects", async (request, response) => {
   await mkdir(DATA_DIR, { recursive: true });
-  const files = (await readdir(DATA_DIR)).filter((file) => file.endsWith(".json"));
+  // On a public server nobody gets a list of everyone's projects: the browser asks for the ids it knows.
+  const wanted = typeof request.query.ids === "string" ? new Set(request.query.ids.split(",").filter((id) => SCENE_ID_PATTERN.test(id))) : null;
+  let files = (await readdir(DATA_DIR)).filter((file) => file.endsWith(".json"));
+  if (PUBLIC) files = files.filter((file) => wanted?.has(file.replace(/\.json$/, "")) ?? false);
   const projects = [];
   for (const file of files) {
     const id = file.replace(/\.json$/, "");
@@ -153,7 +205,7 @@ app.post("/api/projects", async (request, response) => {
   const id = newProjectId(title);
   scene = { ...scene, id, name: title, roomType: roomType || scene.roomType };
   await writeProject(scene);
-  response.status(201).json({ id });
+  response.status(201).json({ id, ownerKey: await claim(id) });
 });
 
 app.post("/api/projects/:id/duplicate", async (request, response) => {
@@ -164,7 +216,7 @@ app.post("/api/projects/:id/duplicate", async (request, response) => {
   const id = newProjectId(name);
   await writeProject({ ...scene, id, name });
   if (existsSync(thumbPath(request.params.id))) await copyFile(thumbPath(request.params.id), thumbPath(id));
-  response.status(201).json({ id });
+  response.status(201).json({ id, ownerKey: await claim(id) });
 });
 
 app.patch("/api/projects/:id", async (request, response) => {
@@ -189,8 +241,13 @@ app.patch("/api/projects/:id", async (request, response) => {
 app.delete("/api/projects/:id", async (request, response) => {
   const id = request.params.id;
   if (!SCENE_ID_PATTERN.test(id)) return response.status(400).json({ error: "Invalid project id." });
+  if (!(await isOwner(id, request.get("x-owner-key")))) return response.status(403).json({ error: "Only the person who created this project can delete it." });
+  const live = sessions.get(id);
   sessions.delete(id);
   clearTimeout(saveTimers.get(id));
+  saveTimers.delete(id);
+  if (live) (await live).closeAll({ type: "project-deleted" });
+  await setOwner(id, null);
   await unlink(scenePath(id)).catch(() => undefined);
   await unlink(thumbPath(id)).catch(() => undefined);
   response.json({ ok: true });
@@ -207,7 +264,7 @@ app.put("/api/projects/:id/thumbnail", async (request, response) => {
 });
 
 // Photo cutouts (transparent PNGs) used by "Photo → 3D" objects.
-const ASSET_DIR = resolve(here, "../data/assets");
+const ASSET_DIR = resolve(DATA_ROOT, "assets");
 const ASSET_ID = /^[a-z0-9-]{8,64}$/;
 app.post("/api/assets", async (request, response) => {
   const dataUrl = String((request.body as { dataUrl?: string })?.dataUrl ?? "");
@@ -236,6 +293,7 @@ app.get("/api/projects/:id/thumbnail", (request, response) => {
 
 app.get("/api/scenes/:id", async (request, response) => {
   if (!SCENE_ID_PATTERN.test(request.params.id)) return response.status(400).json({ error: "Invalid scene id." });
+  if (PUBLIC && !sceneExists(request.params.id)) return response.status(404).json({ error: "Project not found." });
   const session = await getSession(request.params.id);
   response.json({ scene: session.scene, seq: session.seq, savedAt: lastSaved.get(request.params.id) ?? null });
 });
@@ -308,6 +366,20 @@ app.post("/api/ai/brief-to-room", async (request, response) => {
   }
 });
 
+// Heartbeat: drops connections whose device went to sleep or changed networks without closing the socket,
+// so presence stays accurate, and keeps idle sockets alive through hosting proxies.
+const alive = new WeakMap<WebSocket, boolean>();
+setInterval(() => {
+  for (const socket of websocketServer.clients) {
+    if (alive.get(socket) === false) {
+      socket.terminate();
+      continue;
+    }
+    alive.set(socket, false);
+    socket.ping();
+  }
+}, 25_000).unref();
+
 websocketServer.on("connection", (socket: WebSocket, request) => {
   const url = new URL(request.url ?? "/ws", "http://localhost");
   const sceneId = url.searchParams.get("scene") ?? "default";
@@ -315,6 +387,13 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
     socket.close(1008, "Invalid scene id");
     return;
   }
+  // A link to a project that doesn't exist (typo, deleted) must not silently create a new one on a public server.
+  if (PUBLIC && !sceneExists(sceneId)) {
+    socket.close(4004, "Project not found");
+    return;
+  }
+  alive.set(socket, true);
+  socket.on("pong", () => alive.set(socket, true));
   const handle: ClientHandle = {
     send: (message: ServerMessage) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
@@ -342,14 +421,30 @@ websocketServer.on("connection", (socket: WebSocket, request) => {
   socket.on("error", (error) => console.error("WebSocket error", error));
 });
 
-const port = Number(process.env.API_PORT ?? 3001);
+// ---------- Production: serve the built web app from the same origin (so /api and /ws need no extra config) ----------
+if (existsSync(resolve(WEB_DIST, "index.html"))) {
+  app.use("/assets", express.static(resolve(WEB_DIST, "assets"), { immutable: true, maxAge: "1y", fallthrough: false }));
+  app.use(express.static(WEB_DIST, { index: false, maxAge: "1h" }));
+  // Client-side routes (/, /project/<id>, ?scene=<id>) load the app shell. Paths that look like files
+  // (/models/x.gltf) 404 instead, so a missing asset never comes back as HTML.
+  app.get(/^\/(?!api\/|ws$)(?!.*\.[a-zA-Z0-9]+$).*/, (_request, response) => {
+    response.setHeader("Cache-Control", "no-cache");
+    response.sendFile(resolve(WEB_DIST, "index.html"));
+  });
+} else if (PRODUCTION) {
+  console.warn(`web/dist not found at ${WEB_DIST}; run "npm run build" so the server can serve the app.`);
+}
+
+// Hosts (Railway, Render, Fly) tell the app which port to use via PORT; locally the API stays on API_PORT/3001.
+const port = Number(process.env.API_PORT ?? (PRODUCTION ? process.env.PORT : undefined) ?? 3001);
+const HOST = process.env.HOST ?? (PRODUCTION ? "0.0.0.0" : "127.0.0.1");
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("API_PORT must be an integer between 1 and 65535.");
 }
 
-server.listen(port, "127.0.0.1", () => {
-  console.log("Reality Builder API listening at http://127.0.0.1:" + port);
+server.listen(port, HOST, () => {
+  console.log(`Reality Builder ${PRODUCTION ? "server" : "API"} listening at http://${HOST}:${port}${PUBLIC ? " (public mode)" : ""} · data in ${DATA_ROOT}`);
 });
 
 async function shutdown() {

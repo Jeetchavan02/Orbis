@@ -26,6 +26,7 @@ export function TopBar() {
   const history = useWorkspaceStore((state) => state.history);
   const connection = useWorkspaceStore((state) => state.connection);
   const peers = useWorkspaceStore((state) => state.peers);
+  const wasOnline = useWorkspaceStore((state) => state.wasOnline);
   const selfId = useWorkspaceStore((state) => state.selfId);
   const saveStatus = useWorkspaceStore((state) => state.saveStatus);
   const showPerf = useWorkspaceStore((state) => state.showPerf);
@@ -127,9 +128,9 @@ export function TopBar() {
           ))}
           {others.length > 4 ? <span className="avatar avatar--more">+{others.length - 4}</span> : null}
         </div>
-        <span className={"connection connection--" + connection} title={connection === "online" ? "Connected to the collaboration server" : connection === "connecting" ? "Connecting…" : "Offline — edits stay local and you'll be asked how to merge on reconnect"}>
+        <span className={"connection connection--" + connection} title={connection === "online" ? `Live · ${peers.length} ${peers.length === 1 ? "person" : "people"} in this project` : connection === "connecting" ? (wasOnline ? "Connection lost. Reconnecting…" : "Connecting…") : connection === "missing" ? "This project doesn't exist or was deleted" : "Offline. Edits stay on this device and you'll be asked how to merge when you reconnect"}>
           {connection === "online" ? <Wifi size={13} /> : connection === "connecting" ? <Loader2 size={13} className="spin" /> : <CloudOff size={13} />}
-          {connection === "online" ? "Live" : connection === "connecting" ? "Connecting" : "Offline"}
+          {connection === "online" ? (peers.length > 1 ? `Live · ${peers.length}` : "Live") : connection === "connecting" ? (wasOnline ? "Reconnecting" : "Connecting") : connection === "missing" ? "Not found" : "Offline"}
         </span>
         <button type="button" className={"icon-button" + (showPerf ? " icon-button--active" : "")} onClick={() => setShowPerf(!showPerf)} title="Performance overlay (P)" aria-label="Performance overlay"><Gauge size={16} /></button>
         <button type="button" className={"ghost-button" + (viewMode === "walk" ? " ghost-button--active" : "")} onClick={() => setViewMode(viewMode === "walk" ? "perspective" : "walk")} title="Walk through the room at eye height (WASD to move)"><PersonStanding size={14} /> {viewMode === "walk" ? "Exit walk" : "Walkthrough"}</button>

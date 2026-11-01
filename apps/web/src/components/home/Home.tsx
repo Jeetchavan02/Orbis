@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { forgetProject, knownProjects, openProject, ownerKeyFor, rememberProject } from "../../lib/project";
 import {
   ArrowRight, Bell, ChevronRight, PanelLeft, Box, Boxes, Copy, FolderOpen, Grid2X2, Home as HomeIcon, LayoutGrid, Loader2, MoreVertical, Pencil, Plus,
   Search, Settings, ShieldCheck, Sparkles, Trash2, Upload, Users, X, Zap,
@@ -23,7 +24,7 @@ const TEMPLATES: { id: keyof typeof ROOM_ART; label: string; name: string; roomT
 const ROOM_LABELS: Record<string, string> = { bedroom: "Bedroom", living: "Living Room", dining: "Dining Room", kitchen: "Kitchen", office: "Home Office", apartment: "Apartment", bathroom: "Bathroom", kids: "Kids' Room", study: "Study" };
 const SIZES: [number, number][] = [[10, 10], [12, 14], [8, 12]];
 
-const openProject = (id: string) => location.assign(`/?scene=${encodeURIComponent(id)}`);
+
 
 function ago(iso: string) {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -98,8 +99,8 @@ function ProjectCard({ project, onChanged, wide }: { project: Project; onChanged
         <div className="home-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => openProject(project.id)}><FolderOpen size={14} /> Open</button>
           <button type="button" role="menuitem" onClick={() => { setMenu(false); setRenaming(true); }}><Pencil size={14} /> Rename</button>
-          <button type="button" role="menuitem" onClick={() => void act(() => api(`/api/projects/${project.id}/duplicate`, { method: "POST" }))}><Copy size={14} /> Duplicate</button>
-          <button type="button" role="menuitem" className="danger" onClick={() => confirm(`Delete “${project.name}”? This cannot be undone.`) && void act(() => api(`/api/projects/${project.id}`, { method: "DELETE" }))}><Trash2 size={14} /> Delete</button>
+          <button type="button" role="menuitem" onClick={() => void act(async () => { const copy = await api<{ id: string; ownerKey?: string }>(`/api/projects/${project.id}/duplicate`, { method: "POST" }); rememberProject(copy.id, copy.ownerKey); })}><Copy size={14} /> Duplicate</button>
+          <button type="button" role="menuitem" className="danger" onClick={() => confirm(`Delete “${project.name}”? This cannot be undone.`) && void act(async () => { await api(`/api/projects/${project.id}`, { method: "DELETE", headers: ownerKeyFor(project.id) ? { "x-owner-key": ownerKeyFor(project.id)! } : {} }); forgetProject(project.id); })}><Trash2 size={14} /> Delete</button>
         </div>
       ) : null}
     </div>
@@ -121,8 +122,8 @@ function NewProjectDialog({ draft, onClose }: { draft: Draft; onClose: () => voi
     setBusy(true);
     setError(null);
     try {
-      const { id } = await api<{ id: string }>("/api/projects", { method: "POST", body: JSON.stringify(value) });
-      openProject(id);
+      const { id, ownerKey } = await api<{ id: string; ownerKey?: string }>("/api/projects", { method: "POST", body: JSON.stringify(value) });
+      openProject(id, ownerKey);
     } catch (failure) {
       setError((failure as Error).message);
       setBusy(false);
@@ -182,7 +183,7 @@ export function Home() {
   const [profile, setProfile] = useState(loadProfile);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("rb.sidebar") === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((value) => { try { localStorage.setItem("rb.sidebar", value ? "0" : "1"); } catch { /* ignore */ } return !value; });
-  const load = () => api<{ projects: Project[] }>("/api/projects").then((data) => setProjects(data.projects)).catch((failure) => setError((failure as Error).message));
+  const load = () => api<{ projects: Project[] }>("/api/projects?ids=" + encodeURIComponent(knownProjects().join(","))).then((data) => setProjects(data.projects)).catch((failure) => setError((failure as Error).message));
   useEffect(() => void load(), []);
 
   const needle = query.trim().toLowerCase();
@@ -197,8 +198,8 @@ export function Home() {
     if (opening) return;
     setOpening(body.template ?? "blank");
     try {
-      const { id } = await api<{ id: string }>("/api/projects", { method: "POST", body: JSON.stringify(body) });
-      openProject(id);
+      const { id, ownerKey } = await api<{ id: string; ownerKey?: string }>("/api/projects", { method: "POST", body: JSON.stringify(body) });
+      openProject(id, ownerKey);
     } catch (failure) {
       setOpening(null);
       alert((failure as Error).message);
@@ -380,7 +381,7 @@ export function Home() {
               <div>
                 <strong>Collaborate live</strong>
                 <p>Open any project and click <b>Share</b>. Everyone with the link edits the same scene with live cursors; conflicting edits are detected, never silently overwritten.</p>
-                <p className="field-note">Same Wi-Fi: run <code>npm run dev:share</code>. Anywhere: run a Cloudflare tunnel to <code>localhost:5173</code>.</p>
+                {["127.0.0.1", "localhost", "[::1]"].includes(location.hostname) ? <p className="field-note">You're running locally, so links only open on this computer. Share from the deployed site to work with people anywhere.</p> : null}
               </div>
             </div>
           </div>

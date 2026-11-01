@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { openProject } from "../../lib/project";
 import { ArrowLeft, Check, CircleAlert, DoorOpen, FileImage, ImageUp, Loader2, RefreshCw, Sofa, Trash2, Upload, X } from "lucide-react";
 import {
   AiImageResponseSchema, AiPlanAnalyzeResponseSchema,
@@ -167,9 +168,9 @@ export function UploadPlan({ onBack }: { onBack: () => void }) {
     setOpening(true);
     try {
       const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: built.scene.name, roomType: "bedroom", scene: built.scene }) });
-      const body = (await response.json()) as { id?: string; error?: string };
+      const body = (await response.json()) as { id?: string; ownerKey?: string; error?: string };
       if (!response.ok || !body.id) throw new Error(body.error ?? "Could not create the project.");
-      location.assign(`/?scene=${encodeURIComponent(body.id)}`);
+      openProject(body.id, body.ownerKey);
     } catch (failure) {
       setError((failure as Error).message);
       setOpening(false);
